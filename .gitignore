@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+
+# Wrangler
+.wrangler/
+
+# 环境变量（包含敏感信息）
+.dev.vars
+.env
+
+# 日志
+*.log
+
+# 构建产物
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# 操作系统
+.DS_Store
+Thumbs.db

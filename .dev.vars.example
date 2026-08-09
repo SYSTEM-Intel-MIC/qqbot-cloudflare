@@ -1,0 +1,11 @@
+QQ_BOT_APP_ID=你的APP_ID
+QQ_BOT_SECRET=你的Secret
+QQ_BOT_VERIFY_SIGNATURE=true
+AI_BASE_URL=https://api.chatanywhere.tech
+AI_API_KEY=你的AI_API_KEY
+AI_MODEL=gpt-5-mini
+AI_MAX_TOKENS=8192
+AI_MAX_INPUT_TOKENS=8192
+GEMINI_API_KEY=你的Gemini_API_KEY（可选，用于Gemini/Gemma模型）
+YOUTUBE_API_KEY=你的YouTube_Data_API_Key（可选，用于油管功能）
+CURRENT_MODEL_ID=1
