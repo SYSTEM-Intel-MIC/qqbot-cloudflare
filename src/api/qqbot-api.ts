@@ -117,7 +117,6 @@ export class QQBotAPIClient {
     if (msgId) body.msg_id = msgId;
 
     console.log(`[QQBot API] Sending to ${path}`);
-    console.log(`[QQBot API] Token: ${token?.substring(0, 10)}...`);
     console.log(`[QQBot API] Body: ${JSON.stringify(body)}`);
 
     const res = await fetch(`${this.baseUrl}${path}`, {
