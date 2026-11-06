@@ -228,7 +228,9 @@ export class QQBotAdapterCF {
       }
 
       // ===== 解析回复和记忆摘要 =====
-      const parsed = this.parseAiResponse(aiResult.content);\n      const reply = parsed.reply.replaceAll('[[AT_USER]]', '<@!' + userId + '>');\n      const { summary, affectionDelta } = parsed;
+      const parsed = this.parseAiResponse(aiResult.content);
+      const reply = parsed.reply.replaceAll('[[AT_USER]]', '<@!' + userId + '>');
+      const { summary, affectionDelta } = parsed;
       if (affectionDelta !== 0) await this.db.changeAffection(userId, affectionDelta);
       console.log('[QQBot] Reply:', (reply || '').substring(0, 80));
       console.log('[QQBot] Summary:', summary ?? 'none');
