@@ -615,7 +615,8 @@ export class QQBotAdapterCF {
         result.unshift(msg);
         totalTokens += msgTokens;
       } else {
-        trimmedCount++;
+        trimmedCount = i + 1;
+        break;
       }
     }
 
