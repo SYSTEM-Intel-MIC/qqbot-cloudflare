@@ -11,7 +11,8 @@ import { Ed25519 } from '../utils/ed25519.js';
 import { chatWithFallback, WorkersAI } from '../providers/index.js';
 import { MODEL_LIST } from '../models.js';
 import { QQBotAPIClient } from '../api/qqbot-api.js';
-import { QQBotDB, ChatMessage } from '../db/index.js';\nimport { AI_TOOLS, executeTool } from '../tools.js';
+import { QQBotDB, ChatMessage } from '../db/index.js';
+import { AI_TOOLS, executeTool } from '../tools.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../persona.js';
 
 export interface QQBotAdapterConfig {
@@ -25,7 +26,8 @@ export interface QQBotAdapterConfig {
   agnesBaseUrl: string;
   agnesModel: string;
   workersAI: WorkersAI;
-  youtubeApiKey?: string;\n  tavilyApiKey?: string;
+  youtubeApiKey?: string;
+  tavilyApiKey?: string;
   currentModelId?: string;
 }
 
@@ -38,7 +40,8 @@ export class QQBotAdapterCF {
   private agnesBaseUrl: string;
   private agnesModel: string;
   private workersAI: WorkersAI;
-  private youtubeApiKey: string;\n  private tavilyApiKey: string;
+  private youtubeApiKey: string;
+  private tavilyApiKey: string;
   private currentModelId: string;
 
   constructor(private config: QQBotAdapterConfig) {
