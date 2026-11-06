@@ -326,9 +326,8 @@ export class QQBotAdapterCF {
         tavily_search: "搜索网页资料",
         fetch_webpage: "读取公开网页内容",
       };
-      const notice = result.content.trim()
-        ? this.parseAiResponse(result.content).reply
-        : "（我来帮你" + names.map(n => labels[n] || "查询资料").join("、") + "，稍等我一下。）";
+      const preface = result.content.trim() ? this.parseAiResponse(result.content).reply : "";
+      const notice = preface || "（我来帮你" + names.map(n => labels[n] || "查询资料").join("、") + "，稍等我一下。）";
       if (notice) await this.sendReply(userId, groupId, msgId, notice.replaceAll('[[AT_USER]]', '<@!' + userId + '>'));
       conversation.push({ role: "assistant", content: result.content || "", tool_calls: calls });
       for (const [callIndex, call] of calls.entries()) {
