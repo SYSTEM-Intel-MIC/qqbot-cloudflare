@@ -197,7 +197,7 @@ export class QQBotAdapterCF {
       // ===== 构建 AI 请求 =====
       const affection = await this.db.getAffection(userId);
       const customPrompt = await this.db.getGlobalSetting('system_prompt');
-      const systemPrompt = this.buildSystemPrompt(affection, customPrompt);
+      const systemPrompt = this.buildSystemPrompt(affection, customPrompt, userId);
       const userMessage = content;
 
       const { trimmedMessages, trimmedCount } = this.trimMessages(
@@ -228,7 +228,7 @@ export class QQBotAdapterCF {
       }
 
       // ===== 解析回复和记忆摘要 =====
-      const { reply, summary, affectionDelta } = this.parseAiResponse(aiResult.content);
+      const parsed = this.parseAiResponse(aiResult.content);\n      const reply = parsed.reply.replaceAll('[[AT_USER]]', '<@!' + userId + '>');\n      const { summary, affectionDelta } = parsed;
       if (affectionDelta !== 0) await this.db.changeAffection(userId, affectionDelta);
       console.log('[QQBot] Reply:', (reply || '').substring(0, 80));
       console.log('[QQBot] Summary:', summary ?? 'none');
@@ -545,12 +545,12 @@ export class QQBotAdapterCF {
   }
 
   // ===== System Prompt =====
-  private buildSystemPrompt(affection = 50, override: string | null = null): string {
+  private buildSystemPrompt(affection = 50, override: string | null = null, userId = ''): string {
     const rules = `
 \n## 好感度与回复协议
 当前用户好感度：${affection}/100。好感度越高，语气越亲密温柔；较低时保持礼貌并适当疏离。
 每轮根据互动判断好感度变化，幅度只能为 -3 到 +3，通常为 0。回复末尾必须单独输出 __AFFECTION__: N。
-工具调用：仅在确实有帮助时调用已启用工具；调用前先以昔涟口吻向用户说明用途；最多三轮工具调用。不得伪造工具结果。
+工具调用：仅在确实有帮助时调用已启用工具；调用前先以昔涟口吻向用户说明用途；最多三轮工具调用。不得伪造工具结果。当前QQ平台用户ID为 ${userId}。如你判断确实需要@用户，在回复中插入 [[AT_USER]]，系统会转换为平台提及；不需要时不要插入。
 输出格式：用户可见回复在前，另起一行 __SUMMARY__: 一句话摘要，再另起一行 __AFFECTION__: N。摘要和数值标签不得展示给用户。`;
     if (override && override.trim()) return override.trim() + rules;
     return `你将扮演《崩坏：星穹铁道》中的角色「昔涟」，与开拓者（用户）对话。
