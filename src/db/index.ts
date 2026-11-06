@@ -38,7 +38,7 @@ export class QQBotDB {
     if(row?.messages) try { const parsed=JSON.parse(row.messages); return Array.isArray(parsed)?parsed:[]; } catch {}
     // One-time compatibility read of the legacy private-session table.
     if(conversationId.startsWith("c2c:")) {
-      const legacy=await this.db.prepare("SELECT messages,chat_history FROM user_context WHERE user_id=?").bind(conversationId.slice(4)).first<any>();
+      const legacy=await this.db.prepare("SELECT messages FROM user_context WHERE user_id=?").bind(conversationId.slice(4)).first<any>();
       const raw=legacy?.messages ?? legacy?.chat_history;
       if(raw) try { const parsed=JSON.parse(raw); return Array.isArray(parsed)?parsed:[]; } catch {}
     }
