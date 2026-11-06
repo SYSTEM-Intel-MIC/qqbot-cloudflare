@@ -33,6 +33,8 @@ export async function handleAdmin(request:Request,env:AdminEnv):Promise<Response
   const headers={"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"};
   if(request.method==="GET")return new Response(html,{headers});
   if(request.method!=="POST")return new Response("Method not allowed",{status:405});
+  const contentLength=Number(request.headers.get("Content-Length")||"0");
+  if(contentLength>100000)return new Response("Payload too large",{status:413});
   const jsonHeaders={"Content-Type":"application/json","Cache-Control":"no-store"};
   try{
     const ip=request.headers.get("CF-Connecting-IP")||"unknown";
