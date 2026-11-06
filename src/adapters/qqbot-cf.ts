@@ -164,7 +164,6 @@ export class QQBotAdapterCF {
     const content = data?.content || '';
     const groupId = data?.group_id || null;
 
-    console.log(`[QQBot] Message from ${userId}: "${content.substring(0, 80)}"`);
 
     try {
       // 黑名单用户既不回复，也不写入会话上下文。
@@ -225,8 +224,7 @@ export class QQBotAdapterCF {
       let aiResult: { content: string; totalTokens: number };
       try {
         aiResult = await this.chatWithModel(aiMessages, userId, groupId, data?.id);
-        console.log('[QQBot] AI raw:', JSON.stringify(aiResult.content).substring(0, 500));
-        console.log('[QQBot] AI OK:', aiResult.content.length, 'chars,', aiResult.totalTokens, 'tokens');
+        console.log('[QQBot] AI OK; token estimate:', aiResult.totalTokens);
       } catch (e) {
         console.error('[QQBot] AI call failed:', e);
         throw e;
@@ -237,8 +235,6 @@ export class QQBotAdapterCF {
       const reply = parsed.reply.replaceAll('[[AT_USER]]', '<@!' + userId + '>');
       const { summary, affectionDelta } = parsed;
       if (affectionDelta !== 0) await this.db.changeAffection(userId, affectionDelta);
-      console.log('[QQBot] Reply:', (reply || '').substring(0, 80));
-      console.log('[QQBot] Summary:', summary ?? 'none');
 
       // ===== 回复用户 =====
       if (reply) {
