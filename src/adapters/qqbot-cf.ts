@@ -171,8 +171,7 @@ export class QQBotAdapterCF {
       if (fixedCommandHandled) return;
 
       const conversationId = groupId ? `group:${groupId}` : `c2c:${userId}`;
-      const isAtBot = Array.isArray(data?.mentions) && data.mentions.some((m: any) => String(m?.id || m?.user_id || "") === this.config.appId)
-        || /<@!?\d+>/.test(content) && content.includes(this.config.appId);
+      const isAtBot = (Array.isArray(data?.mentions) && data.mentions.length > 0) || /<@!?[^>]+>/.test(content);
       if (groupId && !isAtBot) {
         const probability = await this.db.getReplyProbability(groupId);
         if (Math.random() * 100 >= probability) {
