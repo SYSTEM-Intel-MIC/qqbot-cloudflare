@@ -355,7 +355,7 @@ export class QQBotAdapterCF {
     }
 
     if (cmd === '/帮助') {
-      const text = 'MIC BOT\n/在吗 - 显示在线状态\n/模型列表 - 显示可用模型\n/切换模型 - 切换AI模型\n/运行状态 - 显示运行状态\n/作者信息 - 显示作者信息\n/模型信息 - 显示当前模型\n/用量查询 - 显示API用量统计\n/油管功能 - 显示油管功能说明\n/彩蛋功能 - 显示彩蛋功能说明\n其他消息将由AI助手回复';
+      const text = 'MIC BOT\n/在吗 - 显示在线状态\n/模型列表 - 显示可用模型\n/切换模型 - 切换AI模型\n/运行状态 - 显示运行状态\n/作者信息 - 显示作者信息\n/uid - 查询平台用户ID\n/sid - 查询会话ID\n/好感度 - 查询好感度\n/模型信息 - 显示当前模型\n/用量查询 - 显示API用量统计\n/油管功能 - 显示油管功能说明\n/彩蛋功能 - 显示彩蛋功能说明\n其他消息将由AI助手回复';
       await this.sendReply(userId, groupId, data?.id, text);
       return true;
     }
