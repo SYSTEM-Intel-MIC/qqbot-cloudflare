@@ -325,6 +325,9 @@ export class QQBotAdapterCF {
   // ===== 固定指令 =====
   private async handleFixedCommand(content: string, userId: string, groupId: string | null, data: any): Promise<boolean> {
     const cmd = content.trim();
+    if (cmd === '/uid') { await this.sendReply(userId, groupId, data?.id, 'QQ平台用户ID：' + userId); return true; }
+    if (cmd === '/sid') { await this.sendReply(userId, groupId, data?.id, '会话ID：' + (groupId ? 'group:' + groupId : 'c2c:' + userId)); return true; }
+    if (cmd === '/好感度' || cmd === '/好感度查询') { const value = await this.db.getAffection(userId); await this.sendReply(userId, groupId, data?.id, '昔涟对你的好感度：' + value + '/100'); return true; }
 
     if (cmd === '/在吗') {
       await this.sendReply(userId, groupId, data?.id, '在');
@@ -609,17 +612,19 @@ export class QQBotAdapterCF {
 
   // ===== 解析 AI 返回（处理推理模型输出的英文推理过程）=====
   private parseAiResponse(raw: string): { reply: string; summary: string | null; affectionDelta: number } {
-    // 清理 Gemma think 标签
     let cleaned = raw
-      .replace(/<\|channel\>thought[\s\S]*?<\|channel\|>/gi, '')
-      .replace(/<\|think\>[\s\S]*?<\|think\|>/gi, '')
+      .replace(/<\\|channel\\|>thought[\\s\\S]*?<\\|channel\\|>/gi, '')
+      .replace(/<\\|think\\|>[\\s\\S]*?<\\|think\\|>/gi, '')
       .trim();
-    const marker = '__SUMMARY__:';
-    const idx = cleaned.lastIndexOf(marker);
+    const affectionMatch = cleaned.match(/__AFFECTION__:\\s*(-?\\d+)/i);
+    const affectionDelta = affectionMatch ? Math.max(-3, Math.min(3, Number(affectionMatch[1]))) : 0;
+    cleaned = cleaned.replace(/\\n?__AFFECTION__:\\s*-?\\d+\\s*/i, '').trim();
+    const marker = '__SUMMARY__:', idx = cleaned.lastIndexOf(marker);
     const reply = idx === -1 ? cleaned.trim() : cleaned.substring(0, idx).trim();
     const summary = idx === -1 ? null : cleaned.substring(idx + marker.length).trim();
-    return { reply, summary };
+    return { reply: this.stripSystemOutput(reply), summary, affectionDelta };
   }
+
   private stripSystemOutput(text: string): string {
     // 移除 [系统设定]... 相关内容
     text = text.replace(/\[系统设定\][\s\S]*?(?=\n\n|\n用户|$)/gi, '');
