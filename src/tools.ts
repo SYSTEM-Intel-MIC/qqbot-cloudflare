@@ -8,10 +8,9 @@ export const AI_TOOLS = [
 function safeUrl(input:string):URL {
  const u=new URL(input);
  if(u.protocol!=="https:"||u.username||u.password)throw new Error("仅允许公开 HTTPS 网页");
- const h=u.hostname.toLowerCase();
- if(h==="localhost"||h.endsWith(".localhost")||h.endsWith(".local")||h==="metadata.google.internal"||
-   /^(127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)||
-   h==="::1"||h.startsWith("fc")||h.startsWith("fd")||h.startsWith("fe80:"))throw new Error("禁止访问内网或本机地址");
+ const h=u.hostname.toLowerCase().replace(/^\\[|\\]$/g,"");
+ if(h==="localhost"||h.endsWith(".localhost")||h.endsWith(".local")||h.endsWith(".internal")||h.endsWith(".intranet")||h==="metadata.google.internal")throw new Error("禁止访问本机或内部域名");
+ if(/^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(h)||h.includes(":"))throw new Error("网页抓取只接受域名，不接受 IP 地址");
  return u;
 }
 async function webpage(url:string):Promise<string>{
@@ -25,7 +24,18 @@ async function webpage(url:string):Promise<string>{
  if(!response||!response.ok)throw new Error("网页请求失败："+(response?.status??"unknown"));
  const type=response.headers.get("content-type")||"";
  if(!/(text\/html|text\/plain|application\/json|application\/xml)/i.test(type))throw new Error("目标不是可读取的文本网页");
- const raw=(await response.text()).slice(0,120000);
+ const reader=response.body?.getReader();
+ if(!reader)throw new Error("无法读取网页响应");
+ const chunks:Uint8Array[]=[];let total=0;
+ while(total<120000){
+  const part=await reader.read();if(part.done)break;
+  const chunk=part.value;const remaining=120000-total;
+  if(chunk.length>remaining){chunks.push(chunk.slice(0,remaining));total=120000;await reader.cancel();break;}
+  chunks.push(chunk);total+=chunk.length;
+ }
+ const bytes=new Uint8Array(total);let offset=0;
+ for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+ const raw=new TextDecoder().decode(bytes);
  return raw.replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/\s+/g," ").slice(0,12000);
 }
 export async function executeTool(name:string,args:any,env:ToolEnv):Promise<string>{
