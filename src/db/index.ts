@@ -67,6 +67,7 @@ export class QQBotDB {
   }
 
   async getAffection(userId:string):Promise<number>{
+    await this.db.prepare("INSERT OR IGNORE INTO user_affection(user_id,affection,updated_at) VALUES(?,50,?)").bind(userId,Date.now()).run();
     const row=await this.db.prepare("SELECT affection FROM user_affection WHERE user_id=?").bind(userId).first<any>();
     return Math.max(0,Math.min(100,Number(row?.affection??50)));
   }
