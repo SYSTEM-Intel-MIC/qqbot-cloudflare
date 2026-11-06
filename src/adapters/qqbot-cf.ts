@@ -252,6 +252,15 @@ export class QQBotAdapterCF {
       // ===== 保存完整聊天记录 =====
       try {
         await this.db.appendMessages(conversationId, userMessage, reply || '');
+        const stored = await this.db.getMessages(conversationId);
+        if (summary) {
+          await this.db.replaceMessages(conversationId, [
+            { role: 'assistant', content: '[对话记忆摘要] ' + summary },
+            ...stored.slice(-30),
+          ]);
+        } else if (stored.length > 60) {
+          await this.db.replaceMessages(conversationId, stored.slice(-40));
+        }
       } catch (e) {
         console.error('[QQBot] appendMessages failed:', e);
       }
