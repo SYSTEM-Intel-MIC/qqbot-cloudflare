@@ -163,9 +163,23 @@ export class QQBotAdapterCF {
     console.log(`[QQBot] Message from ${userId}: "${content.substring(0, 80)}"`);
 
     try {
+      // 黑名单用户既不回复，也不写入会话上下文。
+      if (await this.db.isBlacklisted(userId)) return;
+
       // ===== 固定指令处理 =====
       const fixedCommandHandled = await this.handleFixedCommand(content, userId, groupId, data);
       if (fixedCommandHandled) return;
+
+      const conversationId = groupId ? `group:${groupId}` : `c2c:${userId}`;
+      const isAtBot = Array.isArray(data?.mentions) && data.mentions.some((m: any) => String(m?.id || m?.user_id || "") === this.config.appId)
+        || /<@!?\d+>/.test(content) && content.includes(this.config.appId);
+      if (groupId && !isAtBot) {
+        const probability = await this.db.getReplyProbability(groupId);
+        if (Math.random() * 100 >= probability) {
+          await this.db.appendIncomingMessage(conversationId, content);
+          return;
+        }
+      }
 
       // ===== 获取当前模型（全局）=====
       const modelId = await this.getCurrentModelId();
@@ -175,14 +189,14 @@ export class QQBotAdapterCF {
       // ===== 获取聊天记录 =====
       let messages: ChatMessage[] = [];
       try {
-        messages = await this.db.getMessages(userId);
+        messages = await this.db.getMessages(conversationId);
         console.log('[QQBot] Loaded messages count:', messages.length);
       } catch (e) {
         console.error('[QQBot] getMessages failed:', e);
       }
 
       // ===== 构建 AI 请求 =====
-      const systemPrompt = this.buildSystemPrompt();
+      const affection = await this.db.getAffection(userId);\n      const customPrompt = await this.db.getGlobalSetting('system_prompt');\n      const systemPrompt = this.buildSystemPrompt(affection, customPrompt);
       const userMessage = content;
 
       const { trimmedMessages, trimmedCount } = this.trimMessages(
@@ -213,7 +227,7 @@ export class QQBotAdapterCF {
       }
 
       // ===== 解析回复和记忆摘要 =====
-      const { reply, summary } = this.parseAiResponse(aiResult.content);
+      const { reply, summary, affectionDelta } = this.parseAiResponse(aiResult.content);\n      if (affectionDelta !== 0) await this.db.changeAffection(userId, affectionDelta);
       console.log('[QQBot] Reply:', (reply || '').substring(0, 80));
       console.log('[QQBot] Summary:', summary ?? 'none');
 
@@ -233,7 +247,7 @@ export class QQBotAdapterCF {
 
       // ===== 保存完整聊天记录 =====
       try {
-        await this.db.appendMessages(userId, userMessage, reply || '');
+        await this.db.appendMessages(conversationId, userMessage, reply || '');
       } catch (e) {
         console.error('[QQBot] appendMessages failed:', e);
       }
@@ -517,7 +531,7 @@ export class QQBotAdapterCF {
       '## 示例\n' +
       '用户：今天好累啊。\n' +
       '昔涟：（轻轻握住你的手）辛苦啦，开拓者。无论多漫长的旅途，我都会一直陪着你。\n' +
-      '__SUMMARY__: 昔涟安慰了疲惫的开拓者';
+      '__SUMMARY__: 昔涟安慰了疲惫的开拓者\\n' +\n      `\\n## 好感度与输出协议\\n当前用户好感度：${affection}/100。好感度越高，语气越亲密温柔；较低时保持礼貌并适当疏离。每轮按互动判断变化，变化幅度只能为-3到3，通常为0。\\n每轮输出末尾另起一行 __AFFECTION__: N（N为整数）。如需工具，先用昔涟口吻告知用户用途；仅在必要时使用，最多三轮。`;
   }
 
   // ===== Token 估算 =====
@@ -563,7 +577,7 @@ export class QQBotAdapterCF {
   // ===== 解析 AI 返回 =====
 
   // ===== 解析 AI 返回（处理推理模型输出的英文推理过程）=====
-  private parseAiResponse(raw: string): { reply: string; summary: string | null } {
+  private parseAiResponse(raw: string): { reply: string; summary: string | null; affectionDelta: number } {
     // 清理 Gemma think 标签
     let cleaned = raw
       .replace(/<\|channel\>thought[\s\S]*?<\|channel\|>/gi, '')
