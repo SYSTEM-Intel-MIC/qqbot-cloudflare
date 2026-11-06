@@ -218,7 +218,7 @@ export class QQBotAdapterCF {
 
       let aiResult: { content: string; totalTokens: number };
       try {
-        aiResult = await this.chatWithModel(aiMessages);
+        aiResult = await this.chatWithModel(aiMessages, userId, groupId, data?.id);
         console.log('[QQBot] AI raw:', JSON.stringify(aiResult.content).substring(0, 500));
         console.log('[QQBot] AI OK:', aiResult.content.length, 'chars,', aiResult.totalTokens, 'tokens');
       } catch (e) {
@@ -273,9 +273,12 @@ export class QQBotAdapterCF {
     }
   }
 
-  private async sendReplyFromContext(text: string): Promise<void> {\n    // Notification is sent by the caller with the active event context; this is a safe no-op fallback.\n    console.log('[AI tools] User notification:', text.slice(0, 200));\n  }\n\n  // ===== AgnesAI（三次尝试）→ Workers AI 兜底 =====
+  // ===== AgnesAI（三次尝试）→ Workers AI 兜底 =====
   private async chatWithModel(
     messages: { role: string; content: string }[],
+    userId: string,
+    groupId: string | null,
+    msgId: any,
   ): Promise<{ content: string; totalTokens: number; provider: string }> {
     const enabledRaw = await this.db.getGlobalSetting("tools_enabled");
     let enabled = { tavily: false, youtube: false, wget: false };
@@ -296,12 +299,15 @@ export class QQBotAdapterCF {
       const calls = result.toolCalls || [];
       if (!calls.length) return { ...result, totalTokens, provider };
       if (round === 3) {
-        conversation.push({ role: "assistant", content: "工具调用次数已达到上限，请基于已有信息回答。" });
-        continue;
+        const final = await chatWithFallback(
+          { messages: [...conversation, { role: "user", content: "工具调用次数已达到上限，请基于已有信息直接回答。" }], systemPrompt: messages[0]?.content, maxTokens: 2048, tool_choice: "none" },
+          { agnesApiKey: this.agnesApiKey, agnesBaseUrl: this.agnesBaseUrl, agnesModel: this.agnesModel, workersAI: this.workersAI, workersModel: "@cf/openai/gpt-oss-120b" },
+        );
+        return { ...final, totalTokens: totalTokens + final.totalTokens, provider: final.provider };
       }
       if (result.content.trim()) {
-        // Notify the user before any external request, in the character's voice.
-        await this.sendReplyFromContext(result.content);
+        const notice = this.parseAiResponse(result.content).reply;
+        if (notice) await this.sendReply(userId, groupId, msgId, notice);
       }
       conversation.push({ role: "assistant", content: result.content || null, tool_calls: calls });
       for (const call of calls.slice(0, 3)) {
