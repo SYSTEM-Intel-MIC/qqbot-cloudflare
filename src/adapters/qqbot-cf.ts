@@ -333,7 +333,7 @@ export class QQBotAdapterCF {
       const notice = result.content.trim()
         ? this.parseAiResponse(result.content).reply
         : "（我来帮你" + names.map(n => labels[n] || "查询资料").join("、") + "，稍等我一下。）";
-      if (notice) await this.sendReply(userId, groupId, msgId, notice);
+      if (notice) await this.sendReply(userId, groupId, msgId, notice.replaceAll('[[AT_USER]]', '<@!' + userId + '>'));
       conversation.push({ role: "assistant", content: result.content || null, tool_calls: calls });
       for (const [callIndex, call] of calls.slice(0, 3).entries()) {
         const name = String(call.function?.name || "");
