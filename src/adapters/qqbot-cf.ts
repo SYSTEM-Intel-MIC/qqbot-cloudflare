@@ -195,7 +195,9 @@ export class QQBotAdapterCF {
       }
 
       // ===== 构建 AI 请求 =====
-      const affection = await this.db.getAffection(userId);\n      const customPrompt = await this.db.getGlobalSetting('system_prompt');\n      const systemPrompt = this.buildSystemPrompt(affection, customPrompt);
+      const affection = await this.db.getAffection(userId);
+      const customPrompt = await this.db.getGlobalSetting('system_prompt');
+      const systemPrompt = this.buildSystemPrompt(affection, customPrompt);
       const userMessage = content;
 
       const { trimmedMessages, trimmedCount } = this.trimMessages(
@@ -226,7 +228,8 @@ export class QQBotAdapterCF {
       }
 
       // ===== 解析回复和记忆摘要 =====
-      const { reply, summary, affectionDelta } = this.parseAiResponse(aiResult.content);\n      if (affectionDelta !== 0) await this.db.changeAffection(userId, affectionDelta);
+      const { reply, summary, affectionDelta } = this.parseAiResponse(aiResult.content);
+      if (affectionDelta !== 0) await this.db.changeAffection(userId, affectionDelta);
       console.log('[QQBot] Reply:', (reply || '').substring(0, 80));
       console.log('[QQBot] Summary:', summary ?? 'none');
 
