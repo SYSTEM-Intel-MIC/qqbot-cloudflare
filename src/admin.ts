@@ -1,4 +1,5 @@
 import { QQBotDB } from "./db/index.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./persona.js";
 
 export interface AdminEnv { ADMIN_PASSWORD_HASH?: string; DB: any; }
 const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>昔涟机器人管理后台</title><style>
@@ -43,7 +44,7 @@ export async function handleAdmin(request:Request,env:AdminEnv):Promise<Response
       const prompt=await db.getGlobalSetting("system_prompt");
       const toolsRaw=await db.getGlobalSetting("tools_enabled");
       let tools={tavily:false,youtube:false,wget:false};try{tools={...tools,...JSON.parse(toolsRaw||"{}")}}catch{}
-      return Response.json({users:await db.listUsers(),groups:await db.listGroups(),blacklist:await db.listBlacklist(),conversations:(await db.getConversationList()).map(c=>({...c,messages:JSON.parse(c.messages||"[]")})),prompt,tools},{headers:jsonHeaders});
+      return Response.json({users:await db.listUsers(),groups:await db.listGroups(),blacklist:await db.listBlacklist(),conversations:(await db.getConversationList()).map(c=>({...c,messages:JSON.parse(c.messages||"[]")})),prompt:prompt||DEFAULT_SYSTEM_PROMPT,tools},{headers:jsonHeaders});
     }
     if(action==="affection"){if(typeof body.userId!=="string"||!body.userId.trim())throw Error("userId required");await db.setAffection(body.userId,Number(body.affection));}
     else if(action==="group-probability"){if(typeof body.groupId!=="string"||!body.groupId.trim())throw Error("groupId required");await db.setReplyProbability(body.groupId,Number(body.probability));}
