@@ -3,7 +3,7 @@
  * AgnesAI is attempted exactly three times before Workers AI is used.
  */
 export interface ChatRequest {
-  messages: { role: string; content: string }[];
+  messages: any[];
   systemPrompt?: string;
   model?: string;
   maxTokens?: number;
@@ -68,7 +68,7 @@ export class AgnesAIProvider {
         }
         const totalTokens = data.usage?.total_tokens
           ?? Math.ceil((content.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3);
-        return { content, totalTokens, provider: "agnesai" };
+        return { content, totalTokens, provider: "agnesai", toolCalls };
       } catch (error) {
         lastError = error;
         console.warn(`[AI] AgnesAI attempt ${attempt}/3 failed:`, error instanceof Error ? error.message : String(error));
@@ -94,7 +94,7 @@ export class WorkersAIProvider {
     if (!content.trim()) throw new Error("Workers AI returned an empty response");
     const totalTokens = data.usage?.total_tokens
       ?? Math.ceil((content.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3);
-    return { content, totalTokens, provider: "workers-ai" };
+    return { content, totalTokens, provider: "workers-ai", toolCalls };
   }
 }
 
