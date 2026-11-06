@@ -323,18 +323,28 @@ export class QQBotAdapterCF {
         );
         return { ...final, totalTokens: totalTokens + final.totalTokens, provider: final.provider };
       }
-      if (result.content.trim()) {
-        const notice = this.parseAiResponse(result.content).reply;
-        if (notice) await this.sendReply(userId, groupId, msgId, notice);
-      }
+      const names = calls.map((c: any) => String(c.function?.name || ""));
+      const labels: Record<string,string> = {
+        youtube_search: "搜索 YouTube 视频",
+        youtube_details: "查询 YouTube 视频详情",
+        tavily_search: "搜索网页资料",
+        fetch_webpage: "读取公开网页内容",
+      };
+      const notice = result.content.trim()
+        ? this.parseAiResponse(result.content).reply
+        : "（我来帮你" + names.map(n => labels[n] || "查询资料").join("、") + "，稍等我一下。）";
+      if (notice) await this.sendReply(userId, groupId, msgId, notice);
       conversation.push({ role: "assistant", content: result.content || null, tool_calls: calls });
-      for (const call of calls.slice(0, 3)) {
+      for (const [callIndex, call] of calls.slice(0, 3).entries()) {
         const name = String(call.function?.name || "");
+        const callId = String(call.id || "tool_" + round + "_" + callIndex);
         const args = (() => { try { return JSON.parse(call.function?.arguments || "{}"); } catch { return {}; } })();
         let output: string;
-        try { output = await executeTool(name, args, { youtubeApiKey: this.youtubeApiKey, tavilyApiKey: this.tavilyApiKey }); }
-        catch (e) { output = "工具执行失败：" + (e instanceof Error ? e.message : String(e)); }
-        conversation.push({ role: "tool", tool_call_id: call.id, name, content: output.slice(0, 10000) });
+        try {
+          if (!allowed.some((tool: any) => tool.function.name === name)) throw new Error("此工具未在管理后台启用");
+          output = await executeTool(name, args, { youtubeApiKey: this.youtubeApiKey, tavilyApiKey: this.tavilyApiKey });
+        } catch (e) { output = "工具执行失败：" + (e instanceof Error ? e.message : String(e)); }
+        conversation.push({ role: "tool", tool_call_id: callId, name, content: output.slice(0, 10000) });
       }
     }
     throw new Error("AI 工具调用达到最大轮数");
