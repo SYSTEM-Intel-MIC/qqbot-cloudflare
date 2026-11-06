@@ -46,7 +46,7 @@ export class AgnesAIProvider {
         const toolCalls=Array.isArray(message.tool_calls)?message.tool_calls:[];
         if(!content.trim()&&!toolCalls.length)throw new Error("AgnesAI returned an empty response");
         return {content,totalTokens:Number(data.usage?.total_tokens)||estimate(content,messages),provider:"agnesai",toolCalls};
-      }catch(e){lastError=e;console.warn("[AI] AgnesAI attempt "+attempt+"/3 failed:",e instanceof Error?e.message:String(e));}
+      }catch(e){lastError=e;console.warn("[AI] AgnesAI attempt "+attempt+"/3 failed:",e instanceof Error?e.message:String(e));if(attempt<3)await new Promise(resolve=>setTimeout(resolve,attempt*750));}
     }
     throw new Error("AgnesAI failed after 3 attempts: "+(lastError instanceof Error?lastError.message:String(lastError)));
   }
