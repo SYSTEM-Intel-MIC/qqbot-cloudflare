@@ -603,11 +603,12 @@ export class QQBotAdapterCF {
     const result: ChatMessage[] = [];
     let totalTokens = 0;
     let trimmedCount = 0;
-
-    for (const msg of history) {
+    // Preserve the newest turns first; reverse back into chronological order.
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
       const msgTokens = this.estimateTokens(msg.content);
       if (totalTokens + msgTokens <= availableTokens) {
-        result.push(msg);
+        result.unshift(msg);
         totalTokens += msgTokens;
       } else {
         trimmedCount++;
