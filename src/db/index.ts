@@ -86,6 +86,7 @@ export class QQBotDB {
     return r.results??[];
   }
   async getReplyProbability(groupId:string):Promise<number>{
+    await this.db.prepare("INSERT OR IGNORE INTO group_settings(group_id,reply_probability,updated_at) VALUES(?,30,?)").bind(groupId,Date.now()).run();
     const row=await this.db.prepare("SELECT reply_probability FROM group_settings WHERE group_id=?").bind(groupId).first<any>();
     return Math.max(0,Math.min(100,Number(row?.reply_probability??30)));
   }
