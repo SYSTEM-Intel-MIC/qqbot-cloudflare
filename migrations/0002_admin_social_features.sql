@@ -16,3 +16,8 @@ CREATE TABLE IF NOT EXISTS group_settings (
  updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS blacklist (user_id TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
+
+-- Preserve legacy one-to-one private chat history as private conversations.
+INSERT OR IGNORE INTO conversations(conversation_id,messages,last_message_at,updated_at)
+SELECT 'c2c:' || user_id, COALESCE(messages,'[]'), COALESCE(last_message_at,unixepoch()), COALESCE(last_message_at,unixepoch())
+FROM user_context WHERE user_id IS NOT NULL;
