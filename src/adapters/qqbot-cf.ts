@@ -170,6 +170,7 @@ export class QQBotAdapterCF {
     try {
       // 黑名单用户既不回复，也不写入会话上下文。
       if (await this.db.isBlacklisted(userId)) return;
+      const userAffection = await this.db.getAffection(userId);
 
       // ===== 固定指令处理 =====
       const fixedCommandHandled = await this.handleFixedCommand(content, userId, groupId, data);
@@ -200,7 +201,7 @@ export class QQBotAdapterCF {
       }
 
       // ===== 构建 AI 请求 =====
-      const affection = await this.db.getAffection(userId);
+      const affection = userAffection;
       const customPrompt = await this.db.getGlobalSetting('system_prompt');
       const systemPrompt = this.buildSystemPrompt(affection, customPrompt, userId);
       const userMessage = content;
