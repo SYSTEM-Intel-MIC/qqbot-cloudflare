@@ -25,12 +25,13 @@ export interface WorkersAI {
   }):Promise<any>;
 }
 function normalizeToolCalls(raw:any[]):ToolCall[] {
+  const prefix="tool_call_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2)+"_";
   return raw.map((call:any,index:number)=>{
     const fn=call?.function||{};
     const name=String(fn.name||call?.name||"");
     const args=fn.arguments??call?.arguments??{};
     return {
-      id:String(call?.id||"tool_call_"+index),
+      id:String(call?.id||prefix+index),
       type:"function",
       function:{name,arguments:typeof args==="string"?args:JSON.stringify(args)}
     };
