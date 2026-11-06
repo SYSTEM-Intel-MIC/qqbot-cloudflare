@@ -35,9 +35,17 @@ export async function handleAdmin(request:Request,env:AdminEnv):Promise<Response
   if(request.method!=="POST")return new Response("Method not allowed",{status:405});
   const jsonHeaders={"Content-Type":"application/json","Cache-Control":"no-store"};
   try{
+    const ip=request.headers.get("CF-Connecting-IP")||"unknown";
+    const now=Date.now(),record=failedAttempts.get(ip);
+    if(record&&record.until>now&&record.count>=8)return Response.json({error:"尝试次数过多，请稍后再试"},{status:429,headers:jsonHeaders});
     const body=await request.json() as any;
-    if(typeof body.password!=="string"||!env.ADMIN_PASSWORD_HASH||!(await verifyPassword(body.password,env.ADMIN_PASSWORD_HASH)))
+    if(typeof body.password!=="string"||!env.ADMIN_PASSWORD_HASH||!(await verifyPassword(body.password,env.ADMIN_PASSWORD_HASH))){
+      const next=record&&record.until>now?{count:record.count+1,until:record.until}:{count:1,until:now+10*60*1000};
+      failedAttempts.set(ip,next);
+      if(failedAttempts.size>1000)failedAttempts.delete(failedAttempts.keys().next().value!);
       return Response.json({error:"管理员密码错误"},{status:401,headers:jsonHeaders});
+    }
+    failedAttempts.delete(ip);
     const db=new QQBotDB(env.DB);
     const action=String(body.action||"");
     if(action==="overview"){
