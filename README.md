@@ -1,765 +1,308 @@
-# QQ Bot Cloudflare Worker
+# QQ Bot × Cloudflare Workers × AgnesAI
 
-> 基于 Cloudflare Worker 的 QQ 机器人，接入 AI 对话能力，支持多模型切换和 YouTube 搜索功能。
+基于 Cloudflare Workers 的 QQ 机器人。默认角色为《崩坏：星穹铁道》中的昔涟，使用 AgnesAI 免费模型作为主模型，并在连续失败三次后自动切换到 Cloudflare Workers AI 的 `@cf/openai/gpt-oss-120b`。
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7+-blue.svg)](https://www.typescriptlang.org/)
-[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange.svg)](https://workers.cloudflare.com)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+> **免费优先策略：** 本项目不配置付费 Provider，也没有付费自动降级。Workers AI 在 Workers Free 计划每日免费 Neurons 配额耗尽后会请求失败；不要升级到 Workers Paid，也不要添加付款方式，即可避免 Workers AI 超额付费。Cloudflare 官方说明：Free 计划每天 10,000 Neurons，额度在 UTC 00:00 重置，Free 计划超额后请求失败。详见 [Workers AI 定价](https://developers.cloudflare.com/workers-ai/platform/pricing/)。
 
----
+## 功能
 
-## 目录
+- AgnesAI 主模型：`agnes-2.0-flash`；失败重试三次，仍失败则转到 Workers AI。
+- Workers AI 原生 `AI` binding：兜底模型固定为 `@cf/openai/gpt-oss-120b`，不需要额外 API Key。
+- Cloudflare D1 存储：群聊按群会话隔离，私聊按 QQ 平台用户会话隔离。
+- 好感度：每个 QQ 开放平台用户 ID 独立保存，范围 0–100；模型每轮判断 -3 到 +3。
+- 群聊回复概率：每个群独立配置；@机器人时强制回复；随机不回复的消息仍写入群上下文，但不调用 AI。
+- 固定指令：`/uid`、`/sid`、`/好感度`、`/在吗`、`/帮助`、`/运行状态`、`/作者信息`、模型信息/列表/切换、用量查询、YouTube 指令及原有彩蛋。
+- AI 可按需调用 Tavily 搜索、YouTube 搜索/详情和公开网页抓取。工具由 Worker 执行，最多三轮；执行前先向用户说明用途。
+- `/admin` 管理后台：编辑系统提示词、查看会话、调整好感度/群回复概率、黑名单和工具开关。
+- 黑名单用户消息不回复、不写入上下文。
+- 保留 QQ Webhook Ed25519 验签、OpCode 13 回调签名和 OpCode 0 立即 ACK 的原有处理流程。
 
-- [功能特性](#功能特性)
-- [快速开始](#快速开始)
-- [完整部署教程](#完整部署教程)
-  - [前提条件](#前提条件)
-  - [Step 1：注册 QQ 开放平台账号](#step-1注册-qq-开放平台账号)
-  - [Step 2：创建 QQ 机器人应用](#step-2创建-qq-机器人应用)
-  - [Step 3：获取 Cloudflare 账号](#step-3获取-cloudflare-账号)
-  - [Step 4：安装 Node.js 和 Wrangler](#step-4安装-nodejs-和-wrangler)
-  - [Step 5：克隆项目](#step-5克隆项目)
-  - [Step 6：配置环境变量](#step-6配置环境变量)
-  - [Step 7：配置 wrangler.toml](#step-7配置-wranglertoml)
-  - [Step 8：创建 D1 数据库](#step-8创建-d1-数据库)
-  - [Step 9：初始化数据库表](#step-9初始化数据库表)
-  - [Step 10：部署 Worker](#step-10部署-worker)
-  - [Step 11：配置 Webhook](#step-11配置-webhook)
-  - [Step 12：测试机器人](#step-12测试机器人)
-- [DIY 个性化教程](#diy-个性化教程)
-  - [修改 AI 角色人设](#修改-ai-角色人设)
-  - [添加/修改指令](#添加修改指令)
-  - [添加新的 AI 模型](#添加新的-ai-模型)
-  - [自定义 YouTube 功能](#自定义-youtube-功能)
-  - [添加彩蛋功能](#添加彩蛋功能)
-  - [修改回复样式](#修改回复样式)
-- [指令列表](#指令列表)
-- [可用模型](#可用模型)
-- [技术架构](#技术架构)
-- [目录结构](#目录结构)
-- [API 文档](#api-文档)
-- [数据库设计](#数据库设计)
-- [故障排除](#故障排除)
-- [License](#license)
+## 一、准备账号和密钥
 
----
+### 1. QQ 开放平台
 
-## 功能特性
+1. 打开 [QQ 开放平台](https://q.qq.com/) 并登录。
+2. 创建机器人应用，进入应用开发设置。
+3. 记录 **AppID** 和 **AppSecret**。AppSecret 不要提交到 Git。
+4. 开通机器人所需的私聊/群聊消息事件和权限。
+5. 部署后再回来填写 Webhook 地址：`https://你的Worker域名/webhook/qqbot`。
 
-- 🤖 **AI 对话**：接入多种大语言模型，支持 OpenAI 兼容 API 和 Google Gemini
-- 🔄 **多模型切换**：支持多个模型全局切换，所有人共用
-- 💾 **聊天历史**：D1 数据库存储完整聊天记录，支持上下文连贯对话
-- 📊 **用量统计**：自动统计 API 调用次数和 Token 消耗
-- 📺 **YouTube 搜索**：内置 YouTube 搜索和视频详情查询功能
-- 🔐 **签名校验**：Ed25519 签名验证，确保 Webhook 安全
-- 🎭 **角色扮演**：默认以《崩坏：星穹铁道》角色「昔涟」身份对话
-- 🎁 **彩蛋功能**：内置趣味彩蛋
+> 本项目的用户 ID、群 ID 使用 QQ 开放平台事件中的 OpenID/Group OpenID 等平台特殊 ID，不是普通 QQ 号或普通群号。执行 `/uid`、`/sid` 可查看实际收到的 ID。
 
----
+### 2. AgnesAI
 
-## 快速开始
+1. 打开 [AgnesAI API 平台](https://platform.agnes-ai.com/) 注册并登录。
+2. 在 API 密钥页面申请/创建 API Key。
+3. 复制密钥并安全保存。
+4. 默认接口地址为 `https://apihub.agnes-ai.com/v1`，模型为 `agnes-2.0-flash`。
+5. 可查看 [AgnesAI 官方文档](https://agnes-ai.com/en/docs/overview) 和 [官方模型集成说明](https://github.com/AgnesAI-Labs/AgnesAI-Models)。
 
-如果你已经熟悉 Cloudflare Workers 和 QQ 开放平台，可以按以下步骤快速部署：
+AgnesAI 免费账户的速率和可用额度可能变化；本项目执行三次请求尝试，之后切换 Workers AI。遇到 401/403 等密钥或权限错误时，应检查控制台，不要在代码中硬编码密钥。
+
+### 3. Cloudflare
+
+1. 打开 [Cloudflare Dashboard](https://dash.cloudflare.com/) 注册/登录。
+2. 进入 **Workers & Pages**，确认账户处于 Workers Free 计划。
+3. 首次部署可直接使用 Cloudflare 提供的 `workers.dev` 子域名，无需购买域名。
+4. 本项目的 D1 数据库和 Workers AI 都通过 Cloudflare 原生绑定使用。
+
+### 4. 可选：Tavily 搜索
+
+1. 打开 [Tavily](https://www.tavily.com/) 注册账户。
+2. 在 [Tavily Dashboard](https://app.tavily.com/) 创建 API Key。
+3. Tavily 提供免费额度，具体数量和限制以账户控制台为准；默认免费计划额度用完后请求会失败，不会自动购买套餐。
+4. 不配置 Key 或不在后台开启工具，机器人就不会调用 Tavily。
+
+### 5. 可选：YouTube Data API v3
+
+1. 打开 [Google Cloud Console](https://console.cloud.google.com/)。
+2. 创建一个项目。
+3. 进入 API Library，搜索并启用 **YouTube Data API v3**。
+4. 进入 APIs & Services → Credentials → Create Credentials → API key。
+5. 建议对 API Key 设置 API 限制，只允许 YouTube Data API v3。
+6. 复制 API Key，部署时作为 Worker Secret 设置。
+
+官方步骤：[YouTube Data API 入门](https://developers.google.com/youtube/v3/getting-started)。
+
+## 二、创建 D1 数据库
+
+在项目目录安装 Wrangler 并登录：
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/SYSTEM-Intel-MIC/qqbot-cloudflare.git
-cd qqbot-cloudflare
-
-# 2. 安装依赖
 npm install
-
-# 3. 配置环境变量
-cp .dev.vars.example .dev.vars
-# 编辑 .dev.vars 填写你的配置
-
-# 4. 创建 D1 数据库
-wrangler d1 create qq-bot-db
-# 将返回的 database_id 填入 wrangler.toml
-
-# 5. 初始化数据库
-wrangler d1 execute qq-bot-db --file=./schema.sql --remote
-
-# 6. 部署
-CLOUDFLARE_API_TOKEN="你的Token" wrangler deploy
+npx wrangler login
 ```
 
----
-
-## 完整部署教程
-
-### 前提条件
-
-- Node.js 18+
-- npm 或 yarn
-- Cloudflare 账号（免费即可）
-- QQ 开放平台账号
-
-### Step 1：注册 QQ 开放平台账号
-
-1. 访问 [QQ 开放平台](https://q.qq.com)
-2. 点击右上角「注册」
-3. 使用 QQ 登录或手机号注册
-
-### Step 2：创建 QQ 机器人应用
-
-1. 登录后进入「机器人」菜单
-2. 点击「创建机器人」
-3. 填写机器人基本信息：
-   - 机器人名称：自定义（如：我的AI助手）
-   - 机器人描述：简单描述功能
-   - 机器人头像：上传头像
-4. 创建成功后，记录以下信息：
-   - **AppID**：应用唯一标识
-   - **AppSecret**：应用密钥（点击「查看」获取）
-
-> ⚠️ **重要**：AppSecret 只在创建时显示一次，请妥善保存！
-
-### Step 3：获取 Cloudflare 账号
-
-1. 访问 [Cloudflare](https://www.cloudflare.com)
-2. 注册账号（免费即可）
-3. 登录后，在右侧边栏找到「Workers」
-4. 记录你的 **Account ID**（在「概述」页面右侧）
-
-### Step 4：安装 Node.js 和 Wrangler
+创建 D1：
 
 ```bash
-# 安装 Node.js（如果还没安装）
-# 访问 https://nodejs.org 下载 LTS 版本
-
-# 安装 Wrangler CLI
-npm install -g wrangler
-
-# 验证安装
-wrangler --version
-
-# 登录 Cloudflare
-wrangler login
+npx wrangler d1 create qq-bot-db
 ```
 
-### Step 5：克隆项目
-
-```bash
-git clone https://github.com/SYSTEM-Intel-MIC/qqbot-cloudflare.git
-cd qqbot-cloudflare
-
-# 安装依赖
-npm install
-```
-
-### Step 6：配置环境变量
-
-复制环境变量模板：
-
-```bash
-cp .dev.vars.example .dev.vars
-```
-
-编辑 `.dev.vars` 文件，填写你的配置：
-
-```bash
-# QQ 机器人配置（必填）
-QQ_BOT_APP_ID=你的AppID
-QQ_BOT_SECRET=你的AppSecret
-QQ_BOT_VERIFY_SIGNATURE=true
-
-# AI 模型配置（必填一项）
-# 方案A：使用 OpenAI 兼容 API（如 ChatAnywhere、NVIDIA NIM 等）
-AI_BASE_URL=https://api.chatanywhere.tech
-AI_API_KEY=你的APIKey
-AI_MODEL=gpt-5-mini
-
-# 方案B：使用 Google Gemini（需要单独配置 GEMINI_API_KEY）
-# GEMINI_API_KEY=你的GeminiKey
-
-# Token 限制
-AI_MAX_TOKENS=8192
-AI_MAX_INPUT_TOKENS=8192
-
-# 默认模型 ID（对应 models.ts 中的 id）
-CURRENT_MODEL_ID=1
-
-# 可选：YouTube API Key（用于油管功能）
-YOUTUBE_API_KEY=你的YouTube_Key
-```
-
-#### 环境变量说明
-
-| 变量名 | 必填 | 说明 |
-|--------|------|------|
-| `QQ_BOT_APP_ID` | ✅ | QQ 开放平台的 AppID |
-| `QQ_BOT_SECRET` | ✅ | QQ 开放平台的 AppSecret |
-| `QQ_BOT_VERIFY_SIGNATURE` | ❌ | 是否启用签名验证（默认 true） |
-| `AI_BASE_URL` | ⚡ | OpenAI 兼容 API 的基础 URL |
-| `AI_API_KEY` | ⚡ | OpenAI 兼容 API 的 Key |
-| `AI_MODEL` | ❌ | 默认模型名（可被 /切换模型 覆盖） |
-| `AI_MAX_TOKENS` | ❌ | 最大输出 Token 数（默认 8192） |
-| `AI_MAX_INPUT_TOKENS` | ❌ | 最大输入 Token 数（默认 8192） |
-| `GEMINI_API_KEY` | ⚡ | Google Gemini API Key |
-| `YOUTUBE_API_KEY` | ❌ | YouTube Data API v3 Key |
-| `CURRENT_MODEL_ID` | ❌ | 默认模型 ID（默认 1） |
-
-> ⚡ 表示使用 OpenAI 兼容 API 或 Gemini 至少配置一项
-
-### Step 7：配置 wrangler.toml
-
-编辑 `wrangler.toml` 文件：
+复制命令返回的 `database_id`，替换 `wrangler.toml` 中：
 
 ```toml
-account_id = "你的Cloudflare_Account_ID"
-name = "qqbot-cloudflare"
-main = "src/index.ts"
-compatibility_date = "2025-01-01"
-
-# 静态资源托管
-assets = { directory = "./public" }
-
-# 自定义域名（可选，如果有的话）
-# [[routes]]
-# pattern = "你的域名"
-# zone_name = "你的域名"
-# custom_domain = true
-
-# D1 数据库配置
 [[d1_databases]]
 binding = "DB"
 database_name = "qq-bot-db"
-database_id = "你的D1_Database_ID"
-
-# 可观测性
-[observability]
-enabled = true
-head_sampling_rate = 0.1
-
-# 公开的环境变量（非敏感信息）
-[vars]
-QQ_BOT_VERIFY_SIGNATURE = "true"
-AI_BASE_URL = "https://integrate.api.nvidia.com/v1"
-AI_MAX_TOKENS = "12800"
-AI_MAX_INPUT_TOKENS = "12800"
+database_id = "替换为你的 database_id"
 ```
 
-### Step 8：创建 D1 数据库
+初始化全新数据库：
 
 ```bash
-# 创建 D1 数据库
-wrangler d1 create qq-bot-db
+npx wrangler d1 execute qq-bot-db --remote --file=./schema.sql
 ```
 
-执行后会输出类似：
-
-```
-✅ Successfully created DB 'qq-bot-db'
-database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-```
-
-将 `database_id` 复制到 `wrangler.toml` 中。
-
-### Step 9：初始化数据库表
+如果你已经部署过旧版本，**不要删除数据库，也不要重新创建数据库**。执行新增迁移：
 
 ```bash
-# 远程执行 SQL 初始化
-wrangler d1 execute qq-bot-db --file=./schema.sql --remote
+npx wrangler d1 execute qq-bot-db --remote --file=./migrations/0002_admin_social_features.sql
 ```
 
-如果提示数据库不存在，确保 Step 8 已正确执行。
+迁移会创建会话、好感度、群设置和黑名单表，并将旧版私聊历史复制到新会话表。原有表保留，不会主动删除旧数据。
 
-### Step 10：部署 Worker
+## 三、配置 Wrangler 和密钥
+
+确认 `wrangler.toml` 中有以下配置：
+
+```toml
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "qq-bot-db"
+database_id = "你的 D1 database_id"
+```
+
+Workers AI 使用原生绑定，不需要 `AI_API_KEY`。请不要把 `AI` binding 改成外部付费 API。
+
+本地开发环境：
+
+> 注意：`wrangler dev` 调用 Workers AI 时会访问你的 Cloudflare 账户，并消耗 Workers AI 额度；不是完全离线模拟。保持 Workers Free 计划时，消耗计入每日免费额度，额度耗尽后请求失败。
 
 ```bash
-# 方式一：使用 API Token（推荐 CI/CD 使用）
-CLOUDFLARE_API_TOKEN="你的API_Token" wrangler deploy
-
-# 方式二：使用交互式登录（本地开发推荐）
-wrangler login
-wrangler deploy
+cp .dev.vars.example .dev.vars
 ```
 
-部署成功后会显示 Worker 地址，如：
-```
-https://qqbot-cloudflare.your-subdomain.workers.dev
-```
+编辑 `.dev.vars`，填写 QQ 和 AgnesAI 的密钥；按需填写 Tavily/YouTube Key。该文件已在 Git 忽略规则中，切勿提交真实密钥。
 
-### Step 11：配置 Webhook
-
-1. 登录 [QQ 开放平台](https://q.qq.com)
-2. 进入你的机器人应用
-3. 在「开发设置」中找到「消息推送」
-4. 选择「使用长连接或 HTTP 推送」
-5. 配置 Webhook 地址：
-
-```
-https://qqbot-cloudflare.your-subdomain.workers.dev/webhook/qqbot
-```
-
-如果配置了自定义域名：
-
-```
-https://你的域名/webhook/qqbot
-```
-
-6. 点击「保存」
-
-### Step 12：测试机器人
-
-1. 在 QQ 中搜索你的机器人名称
-2. 发送消息测试：
-   - 发送 `/在吗` - 应该回复「在」
-   - 发送 `/帮助` - 应该显示帮助信息
-   - 发送任意文字 - 应该触发 AI 对话
-
----
-
-## DIY 个性化教程
-
-### 修改 AI 角色人设
-
-编辑 `src/adapters/qqbot-cf.ts` 中的 `buildSystemPrompt()` 方法：
-
-```typescript
-private buildSystemPrompt(): string {
-  return '' +
-    '你将扮演【你的角色名】，与用户对话。\n\n' +
-    '## 角色背景\n' +
-    '- 你的角色背景描述...\n\n' +
-    '## 性格与语言风格\n' +
-    '- 你的性格特点...\n\n' +
-    '## 对话规则\n' +
-    '1. 你必须始终保持角色...\n' +
-    '2. 回复格式要求...\n\n' +
-    '## 示例\n' +
-    '用户：你好\n' +
-    '你的角色：（示例回复）';
-}
-```
-
-**关键字段说明**：
-
-| 字段 | 说明 |
-|------|------|
-| 角色背景 | 定义角色的来历、身份等 |
-| 性格与语言风格 | 定义说话方式、语气等 |
-| 对话规则 | 约束 AI 行为的规则 |
-| `__SUMMARY__` | 必须保留，用于记忆摘要 |
-
-### 添加/修改指令
-
-编辑 `src/adapters/qqbot-cf.ts` 中的 `handleFixedCommand()` 方法：
-
-```typescript
-private async handleFixedCommand(content: string, userId: string, groupId: string | null, data: any): Promise<boolean> {
-  const cmd = content.trim();
-
-  // 添加新指令示例
-  if (cmd === '/你的指令') {
-    await this.sendReply(userId, groupId, data?.id, '你的回复内容');
-    return true;  // 返回 true 表示已处理，不再调用 AI
-  }
-
-  // ... 其他指令
-  return false;  // 返回 false 表示未处理，继续调用 AI
-}
-```
-
-**指令处理流程**：
-
-1. 用户发送消息
-2. `handleFixedCommand()` 检查是否匹配固定指令
-3. 如果匹配（返回 true），直接回复，不调用 AI
-4. 如果不匹配（返回 false），调用 AI 生成回复
-
-### 添加新的 AI 模型
-
-编辑 `src/models.ts`：
-
-```typescript
-export const MODEL_LIST: ModelInfo[] = [
-  // 已有模型...
-  { 
-    id: '5',                                    // 唯一 ID（从 1 开始递增）
-    name: '模型显示名称',                        // 显示在 /模型列表 中
-    provider: 'openai',                         // 'openai' 或 'gemini'
-    model: 'api请求的模型名'                     // 实际发送给 API 的模型名
-  },
-];
-```
-
-**Provider 说明**：
-
-- `openai`：使用 OpenAI 兼容 API（需要配置 `AI_BASE_URL` 和 `AI_API_KEY`）
-- `gemini`：使用 Google Gemini 原生 API（需要配置 `GEMINI_API_KEY`）
-
-**支持的 OpenAI 兼容平台**：
-
-| 平台 | Base URL | 说明 |
-|------|----------|------|
-| ChatAnywhere | `https://api.chatanywhere.tech` | GPT 系列 |
-| NVIDIA NIM | `https://integrate.api.nvidia.com/v1` | Nemotron 系列 |
-| DeepSeek | `https://api.deepseek.com` | DeepSeek 系列 |
-| Moonshot | `https://api.moonshot.cn` | Kimi 系列 |
-| OpenRouter | `https://openrouter.ai/api` | 多模型聚合 |
-
-### 自定义 YouTube 功能
-
-YouTube 功能是可选的，需要：
-
-1. 在 [Google Cloud Console](https://console.cloud.google.com) 启用 YouTube Data API v3
-2. 创建 API Key
-3. 在 `.dev.vars` 中配置 `YOUTUBE_API_KEY`
-
-如果不需要 YouTube 功能，可以不配置，机器人会正常运行。
-
-### 添加彩蛋功能
-
-编辑 `src/adapters/qqbot-cf.ts` 中的 `handleFixedCommand()` 方法：
-
-```typescript
-// 在 handleFixedCommand 方法中添加
-if (cmd === '你的彩蛋触发词') {
-  // 文本彩蛋
-  await this.sendReply(userId, groupId, data?.id, '彩蛋回复内容');
-  
-  // 图片彩蛋（需要先将图片放到 public/ 目录）
-  // await this.sendImage(userId, groupId, data?.id, 'https://你的域名/图片路径.gif');
-  
-  return true;
-}
-```
-
-**图片彩蛋配置**：
-
-1. 将图片放到 `public/` 目录
-2. 部署后图片可通过 `https://你的域名/图片名` 访问
-3. 使用 `sendImage()` 方法发送
-
-### 修改回复样式
-
-**修改帮助信息**：
-
-编辑 `handleFixedCommand()` 中 `/帮助` 指令的回复内容。
-
-**修改错误提示**：
-
-编辑 `formatError()` 方法中的错误格式化逻辑。
-
-**修改用量统计格式**：
-
-编辑 `/用量查询` 指令的回复格式。
-
----
-
-## 指令列表
-
-| 指令 | 说明 | 示例 |
-|------|------|------|
-| `/在吗` | 显示在线状态 | `/在吗` |
-| `/帮助` | 显示帮助信息 | `/帮助` |
-| `/运行状态` | 显示运行状态说明 | `/运行状态` |
-| `/作者信息` | 显示作者信息 | `/作者信息` |
-| `/模型列表` | 显示可用模型列表 | `/模型列表` |
-| `/模型信息` | 显示当前使用模型 | `/模型信息` |
-| `/切换模型 编号` | 切换 AI 模型（全局） | `/切换模型 2` |
-| `/用量查询` | 显示 API 用量统计 | `/用量查询` |
-| `/油管功能` | 显示 YouTube 功能说明 | `/油管功能` |
-| `/油管查询 关键词` | 搜索 YouTube 视频 | `/油管查询 崩坏星穹铁道` |
-| `/油管信息 视频ID` | 获取视频详细信息 | `/油管信息 dQw4w9WgXcQ` |
-| `/彩蛋功能` | 显示彩蛋功能说明 | `/彩蛋功能` |
-
----
-
-## 可用模型
-
-| 编号 | 模型名称 | Provider | 说明 |
-|------|---------|----------|------|
-| 1 | Nemotron 3 Super 120B | OpenAI 兼容 | NVIDIA NIM 平台 |
-| 2 | Nemotron 3 Ultra 550B | OpenAI 兼容 | NVIDIA NIM 平台 |
-| 3 | Gemini 2.0 Flash | Google Gemini | Google 官方 |
-| 4 | Gemma 4 26B | Google Gemini | Google 官方 |
-
----
-
-## 技术架构
-
-```
-用户消息 → QQ服务器 → Webhook POST → Cloudflare Worker
-                                          │
-                          ┌───────────────┴───────────────┐
-                          ▼                               ▼
-                    OpCode 13: 回调验证            OpCode 0: 事件推送
-                    (Ed25519 签名)                     │
-                                                      ▼
-                                          ┌───────────────────────┐
-                                          │   QQBotAdapterCF      │
-                                          │   (核心适配器)         │
-                                          └───────────┬───────────┘
-                                                      │
-                                     ┌────────────────┼────────────────┐
-                                     ▼                ▼                ▼
-                               固定指令处理       AI 对话处理       YouTube 搜索
-                               (14个指令)            │
-                                                    ▼
-                                        ┌──────────────────────┐
-                                        │ 全局模型选择 (D1)     │
-                                        │ 聊天历史加载 (D1)      │
-                                        │ 上下文 Token 裁剪     │
-                                        └──────────┬───────────┘
-                                                   │
-                                    ┌──────────────┴──────────────┐
-                                    ▼                              ▼
-                           Provider: OpenAI               Provider: Gemini
-                           (NVIDIA NIM / 兼容API)         (Google 原生API)
-                                    │                              │
-                                    └──────────────┬───────────────┘
-                                                   ▼
-                                    ┌──────────────────────────┐
-                                    │ QQBotAPIClient            │
-                                    │ → 发送回复给用户           │
-                                    └──────────────┬───────────┘
-                                                   │
-                                    ┌──────────────┴───────────┐
-                                    ▼                          ▼
-                            D1: 保存聊天记录          D1: 记录 API 用量
-```
-
----
-
-## 目录结构
-
-```
-qqbot-cloudflare/
-├── src/
-│   ├── index.ts              # Worker 入口，路由分发
-│   ├── types.ts              # 全局类型定义
-│   ├── models.ts             # AI 模型列表定义
-│   ├── adapters/
-│   │   └── qqbot-cf.ts       # QQ Bot 核心适配器
-│   ├── api/
-│   │   └── qqbot-api.ts      # QQ Open API HTTP 客户端
-│   ├── db/
-│   │   └── index.ts          # D1 数据库操作层
-│   ├── providers/
-│   │   └── index.ts          # AI 模型 Provider（OpenAI/Gemini）
-│   └── utils/
-│       └── ed25519.ts        # Ed25519 签名验证工具
-├── public/
-│   └── hrx-dance.gif         # 彩蛋图片资源
-├── schema.sql                # D1 数据库表结构
-├── wrangler.toml             # Wrangler 部署配置
-├── package.json              # NPM 依赖配置
-├── .dev.vars.example         # 环境变量示例
-└── README.md                 # 项目文档
-```
-
----
-
-## API 文档
-
-### HTTP 接口
-
-| 方法 | 路径 | 功能 | 说明 |
-|------|------|------|------|
-| GET | `/` | 健康检查 | 返回服务状态 |
-| GET | `/health` | 健康检查 | 同上 |
-| POST | `/webhook/qqbot` | QQ Bot Webhook | 核心接口 |
-| GET | `/youtube/search?q=&maxResults=` | YouTube 搜索 | 需配置 API Key |
-| GET | `/youtube/details?id=` | YouTube 视频详情 | 需配置 API Key |
-
-### Webhook 协议
-
-QQ 开放平台 Webhook 使用 WebSocket 或 HTTP 推送，本项目使用 HTTP 推送模式。
-
-**OpCode 13 - 回调验证**：
-
-```json
-// 请求
-{
-  "op": 13,
-  "d": {
-    "plain_token": "xxx",
-    "event_ts": "1234567890"
-  }
-}
-
-// 响应
-{
-  "plain_token": "xxx",
-  "signature": "hex签名"
-}
-```
-
-**OpCode 0 - 事件推送**：
-
-```json
-{
-  "op": 0,
-  "t": "C2C_MESSAGE_CREATE",
-  "d": {
-    "author": { "id": "user_id" },
-    "content": "用户消息",
-    "id": "message_id"
-  }
-}
-```
-
----
-
-## 数据库设计
-
-### 表结构
-
-**api_usage（API 用量统计）**：
-
-| 列名 | 类型 | 说明 |
-|------|------|------|
-| id | INTEGER PK | 自增主键 |
-| user_id | TEXT NOT NULL | 用户 ID |
-| date | TEXT NOT NULL | 日期 (YYYY-MM-DD) |
-| api_calls | INTEGER | 调用次数 |
-| total_tokens | INTEGER | Token 消耗 |
-| created_at | INTEGER | 创建时间 |
-| updated_at | INTEGER | 更新时间 |
-| UNIQUE | (user_id, date) | 联合唯一约束 |
-
-**user_context（用户上下文）**：
-
-| 列名 | 类型 | 说明 |
-|------|------|------|
-| id | INTEGER PK | 自增主键 |
-| user_id | TEXT UNIQUE | 用户 ID |
-| chat_history | TEXT | 聊天历史 (JSON) |
-| last_message_at | INTEGER | 最后消息时间 |
-| created_at | INTEGER | 创建时间 |
-
-**global_settings（全局设置）**：
-
-| 列名 | 类型 | 说明 |
-|------|------|------|
-| setting_key | TEXT PK | 设置键 |
-| value | TEXT | 设置值 |
-| updated_at | INTEGER | 更新时间 |
-
-> ⚠️ **注意**：`global_settings` 表需要手动创建：
-
-```sql
-CREATE TABLE IF NOT EXISTS global_settings (
-    setting_key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at INTEGER DEFAULT (unixepoch())
-);
-```
-
----
-
-## 故障排除
-
-### 常见问题
-
-#### 1. 部署后机器人不响应
-
-**检查清单**：
-- [ ] Webhook 地址是否正确（必须是 `https://`）
-- [ ] Worker 是否部署成功（访问 `/health` 检查）
-- [ ] QQ 开放平台是否配置了正确的 Webhook 地址
-- [ ] 是否启用了签名验证（如果启用了，确保 Secret 正确）
-
-**调试方法**：
+生产环境使用 Worker Secrets：
 
 ```bash
-# 检查 Worker 状态
-curl https://你的域名/health
-
-# 检查环境变量配置
-curl https://你的域名/debug/env
-
-# 检查数据库连接
-curl https://你的域名/debug/db
+npx wrangler secret put QQ_BOT_APP_ID
+npx wrangler secret put QQ_BOT_SECRET
+npx wrangler secret put AGNESAI_API_KEY
+npx wrangler secret put ADMIN_PASSWORD_HASH
 ```
 
-#### 2. AI 回复失败
-
-**可能原因**：
-- `AI_API_KEY` 未配置或配置错误
-- `AI_BASE_URL` 不正确
-- API 额度用完
-- 模型不存在或不可用
-
-**解决方法**：
-1. 检查 `.dev.vars` 中的 API 配置
-2. 使用 `/模型列表` 查看可用模型
-3. 使用 `/切换模型` 切换到其他模型
-
-#### 3. 签名验证失败
-
-**错误信息**：`Invalid signature`
-
-**解决方法**：
-1. 确保 `QQ_BOT_SECRET` 配置正确
-2. 检查 Secret 是否有首尾空格
-3. 临时关闭签名验证：`QQ_BOT_VERIFY_SIGNATURE=false`
-
-#### 4. 数据库错误
-
-**错误信息**：`D1_ERROR` 或表不存在
-
-**解决方法**：
+可选密钥：
 
 ```bash
-# 重新初始化数据库
-wrangler d1 execute qq-bot-db --file=./schema.sql --remote
-
-# 创建 global_settings 表
-wrangler d1 execute qq-bot-db --command "CREATE TABLE IF NOT EXISTS global_settings (setting_key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER DEFAULT (unixepoch()));" --remote
+npx wrangler secret put TAVILY_API_KEY
+npx wrangler secret put YOUTUBE_API_KEY
 ```
 
-#### 5. Token 超限
+`AGNESAI_BASE_URL`、`AGNESAI_MODEL`、`AI_MAX_INPUT_TOKENS` 是非敏感配置，默认值已写入 `wrangler.toml`。不要把任何 Key 写入源码、README、前端或 D1。
 
-**错误信息**：`AI 请求失败：context_length_exceeded`
+### 生成管理员密码哈希
 
-**解决方法**：
-- 减小 `AI_MAX_INPUT_TOKENS` 的值
-- 或使用支持更长上下文的模型
-
-### 调试技巧
-
-1. **查看日志**：在 Cloudflare Dashboard 的 Workers 页面查看实时日志
-2. **使用调试接口**：
-   - `/debug/env` - 检查环境变量配置状态
-   - `/debug/db` - 检查数据库连接
-3. **本地开发**：
+管理员密码不会明文存入数据库或源码。先在本地运行：
 
 ```bash
-wrangler dev
+node scripts/generate-admin-hash.mjs
 ```
 
-这会在本地启动一个开发服务器，方便调试。
+输入一个至少 12 位的强密码。脚本输出 PBKDF2-SHA256 哈希。将整行 `ADMIN_PASSWORD_HASH=...` 等号右侧的值复制出来，再执行：
 
----
+```bash
+npx wrangler secret put ADMIN_PASSWORD_HASH
+```
+
+将哈希值粘贴到提示符。不要把原始管理员密码或哈希提交到 Git。
+
+## 四、部署和绑定域名
+
+本地先做类型检查和构建检查：
+
+```bash
+npm run typecheck
+npm run build
+```
+
+启动本地开发：
+
+```bash
+npm run dev
+```
+
+部署：
+
+```bash
+npm run deploy
+```
+
+部署成功后会得到 `https://<worker-name>.<你的子域>.workers.dev` 地址。
+
+### 使用自定义域名（可选）
+
+1. 在 Cloudflare 添加你拥有的域名，并按控制台提示修改域名注册商处的 Nameserver。
+2. 打开 Workers & Pages → 选择本 Worker → Settings → Domains & Routes。
+3. 选择 Add → Custom Domain，填写你希望使用的主机名，例如 `bot.example.com`。
+4. 等待 Cloudflare 配置 DNS 和证书。
+5. 使用自定义域名替换后续 Webhook 和后台地址。
+
+域名注册本身通常需要付费；如果坚持零成本，使用免费的 `workers.dev` 地址即可。
+
+## 五、配置 QQ Webhook
+
+1. 回到 QQ 开放平台机器人应用的开发设置。
+2. 找到事件订阅/Webhook 配置。
+3. 填写：
+   `https://你的Worker域名/webhook/qqbot`
+4. 保存并完成平台回调验证。
+5. 本 Worker 保留原有 OpCode 13 签名响应和 Ed25519 验签算法；不要自行修改 `src/utils/ed25519.ts`。
+6. OpCode 0 验签通过后，Worker 使用 `ctx.waitUntil()` 后台处理消息，并立即返回 `{ "op": 12 }` ACK。
+
+健康检查地址：`https://你的Worker域名/health`。
+
+## 六、使用管理后台
+
+打开：
+
+`https://你的Worker域名/admin`
+
+每次管理请求都需要提交管理员密码，后端使用 Worker Secret 中的 PBKDF2 哈希验证；没有单独公开的管理 JSON API。后台支持：
+
+- **用户好感度：** 查询列表、按 QQ 平台用户 ID 设置 0–100。
+- **群聊回复概率：** 按群 ID 设置 0–100%。@机器人仍为 100% 回复。
+- **系统提示词：** 初始展示内置昔涟角色设定，修改后写入 D1；恢复默认会清空自定义值。
+- **工具开关：** 分别启用/禁用 Tavily、YouTube 和网页抓取。
+- **黑名单：** 将用户 ID 加入/移出黑名单。
+- **会话上下文：** 查看最近会话及保存的上下文。
+
+建议管理员密码只由可信管理员使用，不要在公共设备上保存密码。更换密码时重新生成哈希并再次运行 `wrangler secret put ADMIN_PASSWORD_HASH`。
+
+## 七、机器人指令
+
+| 指令 | 作用 |
+|---|---|
+| `/帮助` | 查看帮助 |
+| `/在吗` | 固定回复 |
+| `/uid` | 查看 QQ 平台用户特殊 ID |
+| `/sid` | 查看当前会话/群特殊 ID |
+| `/好感度` | 查询个人好感度 |
+| `/运行状态` | 查看运行状态说明 |
+| `/作者信息` | 作者信息 |
+| `/模型信息` / `/模型列表` | 查看固定主模型与自动兜底 |
+| `/切换模型 1` | 兼容旧指令；项目只保留 AgnesAI 主模型 |
+| `/用量查询` | 查看用户 API 调用和 Token 统计 |
+| `/油管功能` | 查看 YouTube 功能说明 |
+| `/油管查询 关键词` | 固定指令搜索 YouTube |
+| `/油管信息 视频ID` | 固定指令获取视频详情 |
+| `/彩蛋功能` | 查看原有彩蛋 |
+| `来杯好茶` | 原有彩蛋 |
+| `我想看黄仁勋跳舞` | 原有图片彩蛋 |
+
+## 八、AI 工具和免费额度说明
+
+AI 只有在管理后台打开相应开关后才可调用工具：
+
+- Tavily：互联网搜索摘要，需要 `TAVILY_API_KEY`。
+- YouTube：视频搜索和详情，需要 `YOUTUBE_API_KEY`。
+- 网页抓取：Worker 使用 `fetch` 获取公开 HTTPS 文本网页；拒绝常见本地/私网地址、非 HTTPS、非文本响应，并限制跳转次数和输出长度。
+
+模型调用顺序固定为：
+
+1. AgnesAI 第一次请求失败 → 第二次重试。
+2. 第二次失败 → 第三次重试。
+3. 第三次失败 → 使用 `env.AI.run("@cf/openai/gpt-oss-120b", ...)`。
+4. Workers AI 也失败（例如免费额度耗尽）→ 给用户返回错误，不再请求任何其他服务。
+
+Cloudflare Workers AI 免费额度及限制以[官方定价页](https://developers.cloudflare.com/workers-ai/platform/pricing/)为准。Free 计划为每天 10,000 Neurons，UTC 00:00 重置；Free 计划超过限额时请求失败。**不要将账户升级为 Workers Paid，不要启用任何付费降级。** AgnesAI、Tavily、YouTube 的免费政策和配额由各服务商决定，可能变化；使用前请在各自控制台核对，避免开启付费套餐或超额计费。
+
+## 九、开发与项目结构
+
+```text
+src/
+  adapters/qqbot-cf.ts   QQ Webhook、固定指令、对话流程
+  api/qqbot-api.ts       QQ 消息发送客户端
+  admin.ts               /admin 单入口和密码验证
+  db/index.ts            D1 数据访问层
+  persona.ts             默认昔涟系统提示词
+  providers/index.ts     AgnesAI 三次重试与 Workers AI 兜底
+  tools.ts               Worker 内部工具执行
+  utils/ed25519.ts       原有签名算法（禁止修改）
+migrations/
+  0002_admin_social_features.sql
+scripts/
+  generate-admin-hash.mjs
+schema.sql
+wrangler.toml
+```
+
+常用命令：
+
+```bash
+npm install
+npm run typecheck
+npm run build
+npm run dev
+npm run deploy
+```
+
+## 十、故障排除
+
+- **AgnesAI 401/403：** 检查 API Key、平台权限、模型名和接口地址。
+- **AgnesAI 429：** 查看免费账户 RPM/额度；三次尝试后会自动走 Workers AI。
+- **Workers AI 失败：** 检查 `wrangler.toml` 的 `[ai] binding = "AI"`，确认账户仍为 Workers Free 且当天免费 Neurons 尚有剩余。
+- **D1 报表不存在：** 检查数据库 ID 和 schema/migration 是否执行到远程数据库。
+- **QQ 回调验证失败：** 检查 AppID/AppSecret、Webhook 地址和事件订阅配置。不要改签名算法。
+- **管理后台 401：** 检查 `ADMIN_PASSWORD_HASH` 是否作为 Worker Secret 设置；必须使用哈希值，不是原始密码。
+- **工具无响应：** 检查管理后台工具开关和对应 API Key。工具默认关闭。
+- **机器人不回复群消息：** 检查该群回复概率；@机器人可强制触发。确认消息用户没有在黑名单中。
 
 ## License
 
-MIT License
-
-```
-MIT License
-
-Copyright (c) 2024 SYSTEM-Intel-MIC
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+MIT

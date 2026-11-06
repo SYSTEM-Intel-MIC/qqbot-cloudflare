@@ -1,11 +1,6 @@
-account_id = "此处填写你的账户id"
 name = "qq-bot-cloudflare"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
-
-# 静态资源托管：public/ 目录下的文件会直接通过域名访问
-# 例如 public/pic.png → 你的域名/pic.png
-# 匹配到静态文件的请求直接返回文件，其余请求（如 /webhook/qqbot）走 Worker 代码
 assets = { directory = "./public" }
 
 [observability]
@@ -14,10 +9,14 @@ head_sampling_rate = 0.1
 
 [[d1_databases]]
 binding = "DB"
-database_id = "此处填写你d1 id"
+database_name = "qq-bot-db"
+database_id = "此处填写你的 D1 database_id"
+
+[ai]
+binding = "AI"
 
 [vars]
 QQ_BOT_VERIFY_SIGNATURE = "true"
-AI_BASE_URL = "https://integrate.api.nvidia.com/v1"
-AI_MAX_TOKENS = "12800"
-AI_MAX_INPUT_TOKENS = "12800"
+AGNESAI_BASE_URL = "https://apihub.agnes-ai.com/v1"
+AGNESAI_MODEL = "agnes-2.0-flash"
+AI_MAX_INPUT_TOKENS = "8192"

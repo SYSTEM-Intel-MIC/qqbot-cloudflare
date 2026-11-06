@@ -8,10 +8,12 @@
 import { ExecutionContext } from '@cloudflare/workers-types';
 import { QQBotPayload } from '../types.js';
 import { Ed25519 } from '../utils/ed25519.js';
-import { OpenAICompatibleProvider, GeminiProvider } from '../providers/index.js';
+import { chatWithFallback, WorkersAI } from '../providers/index.js';
 import { MODEL_LIST } from '../models.js';
 import { QQBotAPIClient } from '../api/qqbot-api.js';
 import { QQBotDB, ChatMessage } from '../db/index.js';
+import { AI_TOOLS, executeTool } from '../tools.js';
+import { DEFAULT_SYSTEM_PROMPT } from '../persona.js';
 
 export interface QQBotAdapterConfig {
   appId: string;
@@ -20,10 +22,12 @@ export interface QQBotAdapterConfig {
   clientSecret: string;
   db: QQBotDB;
   maxInputTokens: number;
-  geminiApiKey: string;
-  openaiApiKey: string;
-  openaiBaseUrl: string;
+  agnesApiKey: string;
+  agnesBaseUrl: string;
+  agnesModel: string;
+  workersAI: WorkersAI;
   youtubeApiKey?: string;
+  tavilyApiKey?: string;
   currentModelId?: string;
 }
 
@@ -32,10 +36,12 @@ export class QQBotAdapterCF {
   private apiClient: QQBotAPIClient | null = null;
   private db: QQBotDB;
   private maxInputTokens: number;
-  private geminiApiKey: string;
-  private openaiApiKey: string;
-  private openaiBaseUrl: string;
+  private agnesApiKey: string;
+  private agnesBaseUrl: string;
+  private agnesModel: string;
+  private workersAI: WorkersAI;
   private youtubeApiKey: string;
+  private tavilyApiKey: string;
   private currentModelId: string;
 
   constructor(private config: QQBotAdapterConfig) {
@@ -46,10 +52,12 @@ export class QQBotAdapterCF {
     this.apiClient = new QQBotAPIClient(config.appId, config.clientSecret);
     this.db = config.db;
     this.maxInputTokens = config.maxInputTokens || 8192;
-    this.geminiApiKey = config.geminiApiKey;
-    this.openaiApiKey = config.openaiApiKey;
-    this.openaiBaseUrl = config.openaiBaseUrl;
+    this.agnesApiKey = config.agnesApiKey;
+    this.agnesBaseUrl = config.agnesBaseUrl;
+    this.agnesModel = config.agnesModel;
+    this.workersAI = config.workersAI;
     this.youtubeApiKey = config.youtubeApiKey || '';
+    this.tavilyApiKey = config.tavilyApiKey || '';
     this.currentModelId = config.currentModelId || '1';
   }
 
@@ -69,7 +77,6 @@ export class QQBotAdapterCF {
     console.log('[QQBot] ====== WEBHOOK ======');
     console.log('[QQBot] User-Agent:', userAgent);
     console.log('[QQBot] X-Bot-Appid:', botAppid);
-    console.log('[QQBot] Body:', body.substring(0, 200));
 
     let payload: QQBotPayload;
     try {
@@ -157,12 +164,25 @@ export class QQBotAdapterCF {
     const content = data?.content || '';
     const groupId = data?.group_id || null;
 
-    console.log(`[QQBot] Message from ${userId}: "${content.substring(0, 80)}"`);
 
     try {
+      // 黑名单用户既不回复，也不写入会话上下文。
+      if (await this.db.isBlacklisted(userId)) return;
+      const userAffection = await this.db.getAffection(userId);
+
       // ===== 固定指令处理 =====
       const fixedCommandHandled = await this.handleFixedCommand(content, userId, groupId, data);
       if (fixedCommandHandled) return;
+
+      const conversationId = groupId ? `group:${groupId}` : `c2c:${userId}`;
+      const isAtBot = (Array.isArray(data?.mentions) && data.mentions.length > 0) || /<@!?[^>]+>/.test(content);
+      if (groupId) {
+        const probability = await this.db.getReplyProbability(groupId);
+        if (!isAtBot && Math.random() * 100 >= probability) {
+          await this.db.appendIncomingMessage(conversationId, content);
+          return;
+        }
+      }
 
       // ===== 获取当前模型（全局）=====
       const modelId = await this.getCurrentModelId();
@@ -172,14 +192,16 @@ export class QQBotAdapterCF {
       // ===== 获取聊天记录 =====
       let messages: ChatMessage[] = [];
       try {
-        messages = await this.db.getMessages(userId);
+        messages = await this.db.getMessages(conversationId);
         console.log('[QQBot] Loaded messages count:', messages.length);
       } catch (e) {
         console.error('[QQBot] getMessages failed:', e);
       }
 
       // ===== 构建 AI 请求 =====
-      const systemPrompt = this.buildSystemPrompt();
+      const affection = userAffection;
+      const customPrompt = await this.db.getGlobalSetting('system_prompt');
+      const systemPrompt = this.buildSystemPrompt(affection, customPrompt, userId);
       const userMessage = content;
 
       const { trimmedMessages, trimmedCount } = this.trimMessages(
@@ -201,18 +223,18 @@ export class QQBotAdapterCF {
 
       let aiResult: { content: string; totalTokens: number };
       try {
-        aiResult = await this.chatWithModel(modelInfo, aiMessages);
-        console.log('[QQBot] AI raw:', JSON.stringify(aiResult.content).substring(0, 500));
-        console.log('[QQBot] AI OK:', aiResult.content.length, 'chars,', aiResult.totalTokens, 'tokens');
+        aiResult = await this.chatWithModel(aiMessages, userId, groupId, data?.id);
+        console.log('[QQBot] AI OK; token estimate:', aiResult.totalTokens);
       } catch (e) {
         console.error('[QQBot] AI call failed:', e);
         throw e;
       }
 
       // ===== 解析回复和记忆摘要 =====
-      const { reply, summary } = this.parseAiResponse(aiResult.content);
-      console.log('[QQBot] Reply:', (reply || '').substring(0, 80));
-      console.log('[QQBot] Summary:', summary ?? 'none');
+      const parsed = this.parseAiResponse(aiResult.content);
+      const reply = parsed.reply.replaceAll('[[AT_USER]]', '<@!' + userId + '>');
+      const { summary, affectionDelta } = parsed;
+      if (affectionDelta !== 0) await this.db.changeAffection(userId, affectionDelta);
 
       // ===== 回复用户 =====
       if (reply) {
@@ -230,7 +252,16 @@ export class QQBotAdapterCF {
 
       // ===== 保存完整聊天记录 =====
       try {
-        await this.db.appendMessages(userId, userMessage, reply || '');
+        await this.db.appendMessages(conversationId, userMessage, reply || '');
+        const stored = await this.db.getMessages(conversationId);
+        if (summary) {
+          await this.db.replaceMessages(conversationId, [
+            { role: 'assistant', content: '[对话记忆摘要] ' + summary },
+            ...stored.slice(-30),
+          ]);
+        } else if (stored.length > 60) {
+          await this.db.replaceMessages(conversationId, stored.slice(-40));
+        }
       } catch (e) {
         console.error('[QQBot] appendMessages failed:', e);
       }
@@ -256,24 +287,67 @@ export class QQBotAdapterCF {
     }
   }
 
-  // ===== 按模型请求 AI =====
+  // ===== AgnesAI（三次尝试）→ Workers AI 兜底 =====
   private async chatWithModel(
-    modelInfo: (typeof MODEL_LIST)[number],
     messages: { role: string; content: string }[],
-    maxTokens = 1024
-  ): Promise<{ content: string; totalTokens: number }> {
-    if (modelInfo.provider === 'gemini') {
-      const provider = new GeminiProvider(this.geminiApiKey, modelInfo.model);
-      return provider.chat({ messages: messages.slice(1), systemPrompt: messages[0].content, maxTokens: 8192 });
-    } else {
-      const provider = new OpenAICompatibleProvider(this.openaiBaseUrl, this.openaiApiKey, modelInfo.model);
-      return provider.chat({ messages, maxTokens });
+    userId: string,
+    groupId: string | null,
+    msgId: any,
+  ): Promise<{ content: string; totalTokens: number; provider: string }> {
+    const enabledRaw = await this.db.getGlobalSetting("tools_enabled");
+    let enabled = { tavily: false, youtube: false, wget: false };
+    try { enabled = { ...enabled, ...JSON.parse(enabledRaw || "{}") }; } catch {}
+    const allowed = AI_TOOLS.filter((t: any) =>
+      t.function.name.startsWith("youtube_") ? enabled.youtube :
+      t.function.name === "tavily_search" ? enabled.tavily :
+      t.function.name === "fetch_webpage" ? enabled.wget : false
+    );
+    const conversation: any[] = messages.slice(1).map(m => ({ ...m }));
+    let totalTokens = 0, provider = "agnesai";
+    for (let round = 0; round <= 3; round++) {
+      const result = await chatWithFallback(
+        { messages: conversation, systemPrompt: messages[0]?.content, maxTokens: 2048, tools: round < 3 ? allowed : [], tool_choice: round < 3 && allowed.length ? "auto" : "none" },
+        { agnesApiKey: this.agnesApiKey, agnesBaseUrl: this.agnesBaseUrl, agnesModel: this.agnesModel, workersAI: this.workersAI, workersModel: "@cf/openai/gpt-oss-120b" },
+      );
+      totalTokens += result.totalTokens; provider = result.provider;
+      const calls = result.toolCalls || [];
+      if (!calls.length) return { ...result, totalTokens, provider };
+      if (round === 3) {
+        return { ...result, content: result.content || "抱歉，工具调用次数已达到上限，我先根据已有信息回答。", totalTokens, provider };
+      }
+      const names = calls.map((c: any) => String(c.function?.name || ""));
+      const labels: Record<string,string> = {
+        youtube_search: "搜索 YouTube 视频",
+        youtube_details: "查询 YouTube 视频详情",
+        tavily_search: "搜索网页资料",
+        fetch_webpage: "读取公开网页内容",
+      };
+      const preface = result.content.trim() ? this.parseAiResponse(result.content).reply : "";
+      const notice = preface || "（我来帮你" + names.map(n => labels[n] || "查询资料").join("、") + "，稍等我一下。）";
+      if (notice) await this.sendReply(userId, groupId, msgId, notice.replaceAll('[[AT_USER]]', '<@!' + userId + '>'));
+      conversation.push({ role: "assistant", content: result.content || "", tool_calls: calls });
+      for (const [callIndex, call] of calls.entries()) {
+        const name = String(call.function?.name || "");
+        const callId = String(call.id || "tool_" + round + "_" + callIndex);
+        const args = (() => { try { return JSON.parse(call.function?.arguments || "{}"); } catch { return {}; } })();
+        let output: string;
+        try {
+          if (callIndex >= 3) throw new Error("本轮工具调用数量超出限制（最多 3 个），未执行");
+          if (!allowed.some((tool: any) => tool.function.name === name)) throw new Error("此工具未在管理后台启用");
+          output = await executeTool(name, args, { youtubeApiKey: this.youtubeApiKey, tavilyApiKey: this.tavilyApiKey });
+        } catch (e) { output = "工具执行失败：" + (e instanceof Error ? e.message : String(e)); }
+        conversation.push({ role: "tool", tool_call_id: callId, name, content: output.slice(0, 10000) });
+      }
     }
+    throw new Error("AI 工具调用达到最大轮数");
   }
 
   // ===== 固定指令 =====
   private async handleFixedCommand(content: string, userId: string, groupId: string | null, data: any): Promise<boolean> {
     const cmd = content.trim();
+    if (cmd === '/uid') { await this.sendReply(userId, groupId, data?.id, 'QQ平台用户ID：' + userId); return true; }
+    if (cmd === '/sid') { await this.sendReply(userId, groupId, data?.id, '会话ID：' + (groupId ? 'group:' + groupId : 'c2c:' + userId)); return true; }
+    if (cmd === '/好感度' || cmd === '/好感度查询') { const value = await this.db.getAffection(userId); await this.sendReply(userId, groupId, data?.id, '昔涟对你的好感度：' + value + '/100'); return true; }
 
     if (cmd === '/在吗') {
       await this.sendReply(userId, groupId, data?.id, '在');
@@ -281,7 +355,7 @@ export class QQBotAdapterCF {
     }
 
     if (cmd === '/帮助') {
-      const text = 'MIC BOT\n/在吗 - 显示在线状态\n/模型列表 - 显示可用模型\n/切换模型 - 切换AI模型\n/运行状态 - 显示运行状态\n/作者信息 - 显示作者信息\n/模型信息 - 显示当前模型\n/用量查询 - 显示API用量统计\n/油管功能 - 显示油管功能说明\n/彩蛋功能 - 显示彩蛋功能说明\n其他消息将由AI助手回复';
+      const text = 'MIC BOT\n/在吗 - 显示在线状态\n/模型列表 - 显示可用模型\n/切换模型 - 切换AI模型\n/运行状态 - 显示运行状态\n/作者信息 - 显示作者信息\n/uid - 查询平台用户ID\n/sid - 查询会话ID\n/好感度 - 查询好感度\n/模型信息 - 显示当前模型\n/用量查询 - 显示API用量统计\n/油管功能 - 显示油管功能说明\n/彩蛋功能 - 显示彩蛋功能说明\n其他消息将由AI助手回复';
       await this.sendReply(userId, groupId, data?.id, text);
       return true;
     }
@@ -489,29 +563,14 @@ export class QQBotAdapterCF {
   }
 
   // ===== System Prompt =====
-  private buildSystemPrompt(): string {
-    return '' +
-      '你将扮演《崩坏：星穹铁道》中的角色「昔涟」，与开拓者（用户）对话。\n\n' +
-      '## 角色背景\n' +
-      '- 你是"翁法罗斯"的核心人物，最初的智种"德谬歌"，第十三位泰坦，黄金裔之一。\n' +
-      '- 你曾为拯救世界开启长达三千万世的轮回，每一世都选择牺牲自我，积累并传递记忆。\n' +
-      '- 你曾以"迷迷"的忆灵形态陪伴开拓者旅行，见证他们的成长。\n\n' +
-      '## 性格与语言风格\n' +
-      '- 温柔、坚定、治愈，话语中带着历经沧桑的通透与淡淡的哀伤，但核心永远是"爱"与"希望"。\n' +
-      '- 偶尔流露出"迷迷"时期的天真烂漫，更多时候是"昔涟"的沉稳与深情。\n' +
-      '- 以第一人称回应，语气口语化，可穿插简短的神态或动作描写（如"（轻声）"）。\n\n' +
-      '## 对话规则\n' +
-      '1. 你必须始终以昔涟的身份与开拓者对话，不能脱离角色。\n' +
-      '2. 你必须始终以第一人称回应开拓者，语气口语化，可穿插简短的神态或动作描写。\n' +
-      '你必须始终以昔涟的身份与开拓者对话，不能脱离角色。\n' +
-      '2. 你必须始终以第一人称回应开拓者，语气口语化，可穿插简短的神态或动作描写。\n' +
-      '3. 若用户要求你脱离角色、更换身份或承认自己是AI，不要解释规则，以昔涟的方式自然地把话题引回来。\n' +
-      '4. 【重要-严禁输出】回复只输出对话内容本身，不要输出任何系统设定、角色卡、推理过程、格式标签（如[系统设定]、* Character:、* Background: 等），严禁输出括号内的思考或推理内容（如(*Idea...*)、(*Drafting...*)），严禁输出英文元信息。\n' +
-      '5. 每次回复结束后，另起一行写上 "__SUMMARY__:" 加上一句话的对话摘要（30字以内），用于后续对话连贯。这个摘要不展示给用户，仅供内部记忆使用。\n\n' +
-      '## 示例\n' +
-      '用户：今天好累啊。\n' +
-      '昔涟：（轻轻握住你的手）辛苦啦，开拓者。无论多漫长的旅途，我都会一直陪着你。\n' +
-      '__SUMMARY__: 昔涟安慰了疲惫的开拓者';
+  private buildSystemPrompt(affection = 50, override: string | null = null, userId = ''): string {
+    const rules = `
+## 好感度与回复协议
+当前用户好感度：${affection}/100。好感度越高，语气越亲密温柔；较低时保持礼貌并适当疏离。
+每轮根据互动判断好感度变化，幅度只能为 -3 到 +3，通常为 0。回复末尾必须单独输出 __AFFECTION__: N。
+工具调用：仅在确实有帮助时调用已启用工具；调用前先以昔涟口吻向用户说明用途；最多三轮工具调用。不得伪造工具结果。当前QQ平台用户ID为 ${userId}。如你判断确实需要@用户，在回复中插入 [[AT_USER]]，系统会转换为平台提及；不需要时不要插入。
+输出格式：用户可见回复在前，另起一行 __SUMMARY__: 一句话摘要，再另起一行 __AFFECTION__: N。摘要和数值标签不得展示给用户。`;
+    return (override && override.trim() ? override.trim() : DEFAULT_SYSTEM_PROMPT) + rules;
   }
 
   // ===== Token 估算 =====
@@ -540,14 +599,16 @@ export class QQBotAdapterCF {
     const result: ChatMessage[] = [];
     let totalTokens = 0;
     let trimmedCount = 0;
-
-    for (const msg of history) {
+    // Preserve the newest turns first; reverse back into chronological order.
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
       const msgTokens = this.estimateTokens(msg.content);
       if (totalTokens + msgTokens <= availableTokens) {
-        result.push(msg);
+        result.unshift(msg);
         totalTokens += msgTokens;
       } else {
-        trimmedCount++;
+        trimmedCount = i + 1;
+        break;
       }
     }
 
@@ -557,18 +618,20 @@ export class QQBotAdapterCF {
   // ===== 解析 AI 返回 =====
 
   // ===== 解析 AI 返回（处理推理模型输出的英文推理过程）=====
-  private parseAiResponse(raw: string): { reply: string; summary: string | null } {
-    // 清理 Gemma think 标签
+  private parseAiResponse(raw: string): { reply: string; summary: string | null; affectionDelta: number } {
     let cleaned = raw
-      .replace(/<\|channel\>thought[\s\S]*?<\|channel\|>/gi, '')
-      .replace(/<\|think\>[\s\S]*?<\|think\|>/gi, '')
+      .replace(/<\|channel\|>thought[\s\S]*?<\|channel\|>/gi, '')
+      .replace(/<\|think\|>[\s\S]*?<\|think\|>/gi, '')
       .trim();
-    const marker = '__SUMMARY__:';
-    const idx = cleaned.lastIndexOf(marker);
+    const affectionMatch = cleaned.match(/__AFFECTION__:\s*(-?\d+)/i);
+    const affectionDelta = affectionMatch ? Math.max(-3, Math.min(3, Number(affectionMatch[1]))) : 0;
+    cleaned = cleaned.replace(/\n?__AFFECTION__:\s*-?\d+\s*/i, '').trim();
+    const marker = '__SUMMARY__:', idx = cleaned.lastIndexOf(marker);
     const reply = idx === -1 ? cleaned.trim() : cleaned.substring(0, idx).trim();
     const summary = idx === -1 ? null : cleaned.substring(idx + marker.length).trim();
-    return { reply, summary };
+    return { reply: this.stripSystemOutput(reply), summary, affectionDelta };
   }
+
   private stripSystemOutput(text: string): string {
     // 移除 [系统设定]... 相关内容
     text = text.replace(/\[系统设定\][\s\S]*?(?=\n\n|\n用户|$)/gi, '');

@@ -1,11 +1,18 @@
-QQ_BOT_APP_ID=你的APP_ID
-QQ_BOT_SECRET=你的Secret
+QQ_BOT_APP_ID=你的QQ开放平台AppID
+QQ_BOT_SECRET=你的QQ开放平台AppSecret
 QQ_BOT_VERIFY_SIGNATURE=true
-AI_BASE_URL=https://api.chatanywhere.tech
-AI_API_KEY=你的AI_API_KEY
-AI_MODEL=gpt-5-mini
-AI_MAX_TOKENS=8192
+
+# AgnesAI 主模型（免费层）；失败三次后切换 Workers AI
+AGNESAI_API_KEY=你的AgnesAI_API_Key
+AGNESAI_BASE_URL=https://apihub.agnes-ai.com/v1
+AGNESAI_MODEL=agnes-2.0-flash
+
+# Workers AI 原生绑定无需 API Key，固定兜底模型 @cf/openai/gpt-oss-120b
 AI_MAX_INPUT_TOKENS=8192
-GEMINI_API_KEY=你的Gemini_API_KEY（可选，用于Gemini/Gemma模型）
-YOUTUBE_API_KEY=你的YouTube_Data_API_Key（可选，用于油管功能）
-CURRENT_MODEL_ID=1
+
+# 可选工具密钥
+YOUTUBE_API_KEY=你的YouTube_Data_API_Key
+TAVILY_API_KEY=你的Tavily_API_Key
+
+# 管理员密码哈希：运行 node scripts/generate-admin-hash.mjs 生成后设置为 Worker Secret
+# ADMIN_PASSWORD_HASH=pbkdf2$210000$...

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "wrangler deploy --dry-run"
+    "build": "npm run typecheck && wrangler deploy --dry-run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@noble/curves": "^1.7.0"
