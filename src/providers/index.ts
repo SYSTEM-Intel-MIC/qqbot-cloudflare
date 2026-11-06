@@ -71,7 +71,7 @@ function toWorkersAIMessages(messages:any[]):any[] {
         let args:any={};try{args=JSON.parse(call.function?.arguments||"{}")}catch{}
         return {name:String(call.function?.name||""),arguments:args};
       });
-      return [{role:"assistant",content:JSON.stringify(calls)}];
+      return [{role:"assistant",content:JSON.stringify(calls.length===1?calls[0]:calls)}];
     }
     if(message?.role==="tool")return [{role:"tool",content:String(message.content||"")}];
     return [{role:String(message?.role||"user"),content:typeof message?.content==="string"?message.content:""}];
