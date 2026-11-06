@@ -53,7 +53,8 @@ export class QQBotAdapterCF {
     this.agnesBaseUrl = config.agnesBaseUrl;
     this.agnesModel = config.agnesModel;
     this.workersAI = config.workersAI;
-    this.youtubeApiKey = config.youtubeApiKey || '';\n    this.tavilyApiKey = config.tavilyApiKey || '';
+    this.youtubeApiKey = config.youtubeApiKey || '';
+    this.tavilyApiKey = config.tavilyApiKey || '';
     this.currentModelId = config.currentModelId || '1';
   }
 
