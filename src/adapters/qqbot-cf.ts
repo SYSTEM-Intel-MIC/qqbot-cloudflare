@@ -306,18 +306,14 @@ export class QQBotAdapterCF {
     let totalTokens = 0, provider = "agnesai";
     for (let round = 0; round <= 3; round++) {
       const result = await chatWithFallback(
-        { messages: conversation, systemPrompt: messages[0]?.content, maxTokens: 2048, tools: allowed, tool_choice: allowed.length ? "auto" : "none" },
+        { messages: conversation, systemPrompt: messages[0]?.content, maxTokens: 2048, tools: round < 3 ? allowed : [], tool_choice: round < 3 && allowed.length ? "auto" : "none" },
         { agnesApiKey: this.agnesApiKey, agnesBaseUrl: this.agnesBaseUrl, agnesModel: this.agnesModel, workersAI: this.workersAI, workersModel: "@cf/openai/gpt-oss-120b" },
       );
       totalTokens += result.totalTokens; provider = result.provider;
       const calls = result.toolCalls || [];
       if (!calls.length) return { ...result, totalTokens, provider };
       if (round === 3) {
-        const final = await chatWithFallback(
-          { messages: [...conversation, { role: "user", content: "工具调用次数已达到上限，请基于已有信息直接回答。" }], systemPrompt: messages[0]?.content, maxTokens: 2048, tool_choice: "none" },
-          { agnesApiKey: this.agnesApiKey, agnesBaseUrl: this.agnesBaseUrl, agnesModel: this.agnesModel, workersAI: this.workersAI, workersModel: "@cf/openai/gpt-oss-120b" },
-        );
-        return { ...final, totalTokens: totalTokens + final.totalTokens, provider: final.provider };
+        return { ...result, content: result.content || "抱歉，工具调用次数已达到上限，我先根据已有信息回答。", totalTokens, provider };
       }
       const names = calls.map((c: any) => String(c.function?.name || ""));
       const labels: Record<string,string> = {
