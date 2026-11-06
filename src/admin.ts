@@ -27,6 +27,7 @@ async function verifyPassword(password:string,stored:string):Promise<boolean>{
     let diff=0;for(let i=0;i<bits.length;i++)diff|=bits[i]^expected[i];return diff===0;
   }catch{return false}
 }
+const failedAttempts = new Map<string,{count:number;until:number}>();
 export async function handleAdmin(request:Request,env:AdminEnv):Promise<Response>{
   const headers={"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"};
   if(request.method==="GET")return new Response(html,{headers});
