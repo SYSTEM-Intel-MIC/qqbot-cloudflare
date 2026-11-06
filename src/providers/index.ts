@@ -64,10 +64,24 @@ export class AgnesAIProvider {
     throw new Error("AgnesAI failed after 3 attempts: "+(lastError instanceof Error?lastError.message:String(lastError)));
   }
 }
+function toWorkersAIMessages(messages:any[]):any[] {
+  return messages.flatMap((message:any)=>{
+    if(message?.role==="assistant"&&Array.isArray(message.tool_calls)){
+      const calls=message.tool_calls.map((call:any)=>{
+        let args:any={};try{args=JSON.parse(call.function?.arguments||"{}")}catch{}
+        return {name:String(call.function?.name||""),arguments:args};
+      });
+      return [{role:"assistant",content:JSON.stringify(calls)}];
+    }
+    if(message?.role==="tool")return [{role:"tool",content:String(message.content||"")}];
+    return [{role:String(message?.role||"user"),content:typeof message?.content==="string"?message.content:""}];
+  });
+}
 export class WorkersAIProvider {
   constructor(private binding:WorkersAI,private model="@cf/openai/gpt-oss-120b"){}
   async chat(req:ChatRequest):Promise<ChatResult>{
-    const messages=req.systemPrompt?[{role:"system",content:req.systemPrompt},...req.messages]:req.messages;
+    const rawMessages=req.systemPrompt?[{role:"system",content:req.systemPrompt},...req.messages]:req.messages;
+    const messages=toWorkersAIMessages(rawMessages);
     const data=await this.binding.run(this.model,{messages,max_tokens:req.maxTokens??2048,temperature:req.temperature??0.7,
       ...(req.tools?.length?{tools:req.tools,tool_choice:req.tool_choice||"auto"}:{})});
     const message=data?.choices?.[0]?.message||data;
