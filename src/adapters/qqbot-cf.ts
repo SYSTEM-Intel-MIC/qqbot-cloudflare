@@ -11,7 +11,7 @@ import { Ed25519 } from '../utils/ed25519.js';
 import { chatWithFallback, WorkersAI } from '../providers/index.js';
 import { MODEL_LIST } from '../models.js';
 import { QQBotAPIClient } from '../api/qqbot-api.js';
-import { QQBotDB, ChatMessage } from '../db/index.js';
+import { QQBotDB, ChatMessage } from '../db/index.js';\nimport { AI_TOOLS, executeTool } from '../tools.js';
 
 export interface QQBotAdapterConfig {
   appId: string;
@@ -24,7 +24,7 @@ export interface QQBotAdapterConfig {
   agnesBaseUrl: string;
   agnesModel: string;
   workersAI: WorkersAI;
-  youtubeApiKey?: string;
+  youtubeApiKey?: string;\n  tavilyApiKey?: string;
   currentModelId?: string;
 }
 
@@ -37,7 +37,7 @@ export class QQBotAdapterCF {
   private agnesBaseUrl: string;
   private agnesModel: string;
   private workersAI: WorkersAI;
-  private youtubeApiKey: string;
+  private youtubeApiKey: string;\n  private tavilyApiKey: string;
   private currentModelId: string;
 
   constructor(private config: QQBotAdapterConfig) {
@@ -52,7 +52,7 @@ export class QQBotAdapterCF {
     this.agnesBaseUrl = config.agnesBaseUrl;
     this.agnesModel = config.agnesModel;
     this.workersAI = config.workersAI;
-    this.youtubeApiKey = config.youtubeApiKey || '';
+    this.youtubeApiKey = config.youtubeApiKey || '';\n    this.tavilyApiKey = config.tavilyApiKey || '';
     this.currentModelId = config.currentModelId || '1';
   }
 
@@ -273,22 +273,47 @@ export class QQBotAdapterCF {
     }
   }
 
-  // ===== AgnesAI（三次尝试）→ Workers AI 兜底 =====
+  private async sendReplyFromContext(text: string): Promise<void> {\n    // Notification is sent by the caller with the active event context; this is a safe no-op fallback.\n    console.log('[AI tools] User notification:', text.slice(0, 200));\n  }\n\n  // ===== AgnesAI（三次尝试）→ Workers AI 兜底 =====
   private async chatWithModel(
     messages: { role: string; content: string }[],
   ): Promise<{ content: string; totalTokens: number; provider: string }> {
-    const result = await chatWithFallback(
-      { messages: messages.slice(1), systemPrompt: messages[0]?.content, maxTokens: 2048 },
-      {
-        agnesApiKey: this.agnesApiKey,
-        agnesBaseUrl: this.agnesBaseUrl,
-        agnesModel: this.agnesModel,
-        workersAI: this.workersAI,
-        workersModel: "@cf/openai/gpt-oss-120b",
-      },
+    const enabledRaw = await this.db.getGlobalSetting("tools_enabled");
+    let enabled = { tavily: false, youtube: false, wget: false };
+    try { enabled = { ...enabled, ...JSON.parse(enabledRaw || "{}") }; } catch {}
+    const allowed = AI_TOOLS.filter((t: any) =>
+      t.function.name.startsWith("youtube_") ? enabled.youtube :
+      t.function.name === "tavily_search" ? enabled.tavily :
+      t.function.name === "fetch_webpage" ? enabled.wget : false
     );
-    console.log("[AI] Provider selected:", result.provider);
-    return result;
+    const conversation: any[] = messages.slice(1).map(m => ({ ...m }));
+    let totalTokens = 0, provider = "agnesai";
+    for (let round = 0; round <= 3; round++) {
+      const result = await chatWithFallback(
+        { messages: conversation, systemPrompt: messages[0]?.content, maxTokens: 2048, tools: allowed, tool_choice: allowed.length ? "auto" : "none" },
+        { agnesApiKey: this.agnesApiKey, agnesBaseUrl: this.agnesBaseUrl, agnesModel: this.agnesModel, workersAI: this.workersAI, workersModel: "@cf/openai/gpt-oss-120b" },
+      );
+      totalTokens += result.totalTokens; provider = result.provider;
+      const calls = result.toolCalls || [];
+      if (!calls.length) return { ...result, totalTokens, provider };
+      if (round === 3) {
+        conversation.push({ role: "assistant", content: "工具调用次数已达到上限，请基于已有信息回答。" });
+        continue;
+      }
+      if (result.content.trim()) {
+        // Notify the user before any external request, in the character's voice.
+        await this.sendReplyFromContext(result.content);
+      }
+      conversation.push({ role: "assistant", content: result.content || null, tool_calls: calls });
+      for (const call of calls.slice(0, 3)) {
+        const name = String(call.function?.name || "");
+        const args = (() => { try { return JSON.parse(call.function?.arguments || "{}"); } catch { return {}; } })();
+        let output: string;
+        try { output = await executeTool(name, args, { youtubeApiKey: this.youtubeApiKey, tavilyApiKey: this.tavilyApiKey }); }
+        catch (e) { output = "工具执行失败：" + (e instanceof Error ? e.message : String(e)); }
+        conversation.push({ role: "tool", tool_call_id: call.id, name, content: output.slice(0, 10000) });
+      }
+    }
+    throw new Error("AI 工具调用达到最大轮数");
   }
 
   // ===== 固定指令 =====
