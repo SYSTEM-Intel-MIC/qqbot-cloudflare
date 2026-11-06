@@ -4,18 +4,18 @@
 import { ExecutionContext } from '@cloudflare/workers-types';
 import { QQBotAdapterCF } from './adapters/qqbot-cf.js';
 import { QQBotDB } from './db/index.js';
-import { MODEL_LIST } from './models.js';
+import type { WorkersAI } from './providers/index.js';
 
 interface Env {
   QQ_BOT_APP_ID: string;
   QQ_BOT_SECRET: string;
   QQ_BOT_VERIFY_SIGNATURE?: string;
-  AI_BASE_URL?: string;
-  AI_API_KEY?: string;
-  AI_MODEL?: string;
+  AGNESAI_API_KEY: string;
+  AGNESAI_BASE_URL?: string;
+  AGNESAI_MODEL?: string;
+  AI: WorkersAI;
   AI_MAX_TOKENS?: string;
   AI_MAX_INPUT_TOKENS?: string;
-  GEMINI_API_KEY?: string;
   YOUTUBE_API_KEY?: string;
   CURRENT_MODEL_ID?: string;
   DB: D1Database;
@@ -32,9 +32,10 @@ function getOrCreateAdapter(env: Env): QQBotAdapterCF {
     clientSecret: env.QQ_BOT_SECRET,
     db,
     maxInputTokens,
-    geminiApiKey: env.GEMINI_API_KEY || '',
-    openaiApiKey: env.AI_API_KEY || '',
-    openaiBaseUrl: env.AI_BASE_URL || 'https://api.chatanywhere.tech',
+    agnesApiKey: env.AGNESAI_API_KEY || '',
+    agnesBaseUrl: env.AGNESAI_BASE_URL || 'https://apihub.agnes-ai.com/v1',
+    agnesModel: env.AGNESAI_MODEL || 'agnes-2.0-flash',
+    workersAI: env.AI,
     youtubeApiKey: env.YOUTUBE_API_KEY || '',
     currentModelId: env.CURRENT_MODEL_ID || '1',
   });
