@@ -118,7 +118,9 @@ database_id = "你的 D1 database_id"
 
 Workers AI 使用原生绑定，不需要 `AI_API_KEY`。请不要把 `AI` binding 改成外部付费 API。
 
-本地开发环境：\n\n> 注意：\`wrangler dev\` 调用 Workers AI 时会访问你的 Cloudflare 账户，并消耗 Workers AI 额度；不是完全离线模拟。保持 Workers Free 计划时，消耗计入每日免费额度，额度耗尽后请求失败。
+本地开发环境：
+
+> 注意：`wrangler dev` 调用 Workers AI 时会访问你的 Cloudflare 账户，并消耗 Workers AI 额度；不是完全离线模拟。保持 Workers Free 计划时，消耗计入每日免费额度，额度耗尽后请求失败。
 
 ```bash
 cp .dev.vars.example .dev.vars
