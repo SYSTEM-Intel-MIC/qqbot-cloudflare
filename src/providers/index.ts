@@ -1,134 +1,80 @@
-/**
- * AgnesAI primary provider with Cloudflare Workers AI free-tier fallback.
- * AgnesAI is attempted exactly three times before Workers AI is used.
- */
+/** AgnesAI (3 attempts) followed by native Workers AI free-tier fallback. */
+export type ToolCall = { id:string; type?:string; function:{name:string;arguments:string} };
 export interface ChatRequest {
   messages: any[];
   systemPrompt?: string;
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  tools?: any[];
+  tool_choice?: "auto" | "none";
 }
-
 export interface ChatResult {
-  content: string;
-  totalTokens: number;
-  provider: "agnesai" | "workers-ai";
+  content:string;
+  totalTokens:number;
+  provider:"agnesai"|"workers-ai";
+  toolCalls:ToolCall[];
 }
-
 export interface WorkersAI {
-  run(
-    model: string,
-    input: {
-      messages: { role: string; content: string }[];
-      max_tokens?: number;
-      temperature?: number;
-    }
-  ): Promise<{ response?: string; usage?: { total_tokens?: number }; [key: string]: unknown }>;
+  run(model:string,input:{
+    messages:any[];
+    max_tokens?:number;
+    temperature?:number;
+    tools?:any[];
+    tool_choice?:"auto"|"none";
+  }):Promise<any>;
 }
-
+function estimate(content:string,messages:any[]):number {
+  return Math.ceil((content.length+messages.reduce((n,m)=>n+String(m.content||"").length,0))/3);
+}
 export class AgnesAIProvider {
-  constructor(
-    private apiKey: string,
-    private baseUrl = "https://apihub.agnes-ai.com/v1",
-    private model = "agnes-2.0-flash",
-  ) {}
-
-  async chat(req: ChatRequest): Promise<ChatResult> {
-    if (!this.apiKey) throw new Error("AGNESAI_API_KEY is not configured");
-    const messages = req.systemPrompt
-      ? [{ role: "system", content: req.systemPrompt }, ...req.messages]
-      : req.messages;
-
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const response = await fetch(`${this.baseUrl.replace(/\\/$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: req.model || this.model,
-            messages,
-            max_tokens: req.maxTokens ?? 2048,
-            temperature: req.temperature ?? 0.7,
-            stream: false,
-          }),
+  constructor(private apiKey:string,private baseUrl="https://apihub.agnes-ai.com/v1",private model="agnes-2.0-flash"){}
+  async chat(req:ChatRequest):Promise<ChatResult>{
+    if(!this.apiKey)throw new Error("AGNESAI_API_KEY is not configured");
+    const messages=req.systemPrompt?[{role:"system",content:req.systemPrompt},...req.messages]:req.messages;
+    let lastError:unknown;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        const response=await fetch(this.baseUrl.replace(/\/$/,"")+"/chat/completions",{
+          method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+this.apiKey},
+          body:JSON.stringify({model:req.model||this.model,messages,max_tokens:req.maxTokens??2048,temperature:req.temperature??0.7,stream:false,
+            ...(req.tools?.length?{tools:req.tools,tool_choice:req.tool_choice||"auto"}:{})})
         });
-        if (!response.ok) {
-          const detail = (await response.text()).slice(0, 500);
-          throw new Error(`AgnesAI HTTP ${response.status}: ${detail}`);
-        }
-        const data = await response.json() as any;
-        const content = data.choices?.[0]?.message?.content;
-        if (typeof content !== "string" || !content.trim()) {
-          throw new Error("AgnesAI returned an empty response");
-        }
-        const totalTokens = data.usage?.total_tokens
-          ?? Math.ceil((content.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3);
-        return { content, totalTokens, provider: "agnesai", toolCalls };
-      } catch (error) {
-        lastError = error;
-        console.warn(`[AI] AgnesAI attempt ${attempt}/3 failed:`, error instanceof Error ? error.message : String(error));
-      }
+        if(!response.ok)throw new Error("AgnesAI HTTP "+response.status+": "+(await response.text()).slice(0,500));
+        const data:any=await response.json(),message=data.choices?.[0]?.message||{};
+        const content=typeof message.content==="string"?message.content:"";
+        const toolCalls=Array.isArray(message.tool_calls)?message.tool_calls:[];
+        if(!content.trim()&&!toolCalls.length)throw new Error("AgnesAI returned an empty response");
+        return {content,totalTokens:Number(data.usage?.total_tokens)||estimate(content,messages),provider:"agnesai",toolCalls};
+      }catch(e){lastError=e;console.warn("[AI] AgnesAI attempt "+attempt+"/3 failed:",e instanceof Error?e.message:String(e));}
     }
-    throw new Error(`AgnesAI failed after 3 attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+    throw new Error("AgnesAI failed after 3 attempts: "+(lastError instanceof Error?lastError.message:String(lastError)));
   }
 }
-
 export class WorkersAIProvider {
-  constructor(private binding: WorkersAI, private model = "@cf/openai/gpt-oss-120b") {}
-
-  async chat(req: ChatRequest): Promise<ChatResult> {
-    const messages = req.systemPrompt
-      ? [{ role: "system", content: req.systemPrompt }, ...req.messages]
-      : req.messages;
-    const data = await this.binding.run(this.model, {
-      messages,
-      max_tokens: req.maxTokens ?? 2048,
-      temperature: req.temperature ?? 0.7,
-    });
-    const content = typeof data.response === "string" ? data.response : "";
-    if (!content.trim()) throw new Error("Workers AI returned an empty response");
-    const totalTokens = data.usage?.total_tokens
-      ?? Math.ceil((content.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3);
-    return { content, totalTokens, provider: "workers-ai", toolCalls };
+  constructor(private binding:WorkersAI,private model="@cf/openai/gpt-oss-120b"){}
+  async chat(req:ChatRequest):Promise<ChatResult>{
+    const messages=req.systemPrompt?[{role:"system",content:req.systemPrompt},...req.messages]:req.messages;
+    const data=await this.binding.run(this.model,{messages,max_tokens:req.maxTokens??2048,temperature:req.temperature??0.7,
+      ...(req.tools?.length?{tools:req.tools,tool_choice:req.tool_choice||"auto"}:{})});
+    const message=data?.choices?.[0]?.message||data;
+    const content=typeof message?.content==="string"?message.content:(typeof data?.response==="string"?data.response:"");
+    const toolCalls=Array.isArray(message?.tool_calls)?message.tool_calls:[];
+    if(!content.trim()&&!toolCalls.length)throw new Error("Workers AI returned an empty response");
+    return {content,totalTokens:Number(data?.usage?.total_tokens)||estimate(content,messages),provider:"workers-ai",toolCalls};
   }
 }
-
-/**
- * Retry AgnesAI three times, then use the native Workers AI binding.
- * Workers AI remains subject to the account's included daily allocation;
- * there is deliberately no paid-provider fallback.
- */
-export async function chatWithFallback(
-  req: ChatRequest,
-  config: {
-    agnesApiKey: string;
-    agnesBaseUrl?: string;
-    agnesModel?: string;
-    workersAI: WorkersAI;
-    workersModel?: string;
-  },
-): Promise<ChatResult> {
-  try {
-    return await new AgnesAIProvider(
-      config.agnesApiKey,
-      config.agnesBaseUrl,
-      config.agnesModel,
-    ).chat(req);
-  } catch (agnesError) {
-    console.error("[AI] AgnesAI exhausted all 3 attempts; switching to Workers AI", agnesError);
-    try {
-      const result = await new WorkersAIProvider(config.workersAI, config.workersModel).chat(req);
-      console.info("[AI] Response generated by Workers AI fallback");
-      return result;
-    } catch (fallbackError) {
-      throw new Error(
-        `AI providers unavailable. AgnesAI failed after 3 attempts; Workers AI fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
-      );
+export async function chatWithFallback(req:ChatRequest,config:{
+  agnesApiKey:string;agnesBaseUrl?:string;agnesModel?:string;workersAI:WorkersAI;workersModel?:string;
+}):Promise<ChatResult>{
+  try{return await new AgnesAIProvider(config.agnesApiKey,config.agnesBaseUrl,config.agnesModel).chat(req);}
+  catch(agnesError){
+    console.error("[AI] AgnesAI exhausted all 3 attempts; switching to Workers AI",agnesError);
+    try{
+      const result=await new WorkersAIProvider(config.workersAI,config.workersModel).chat(req);
+      console.info("[AI] Response generated by Workers AI fallback");return result;
+    }catch(fallbackError){
+      throw new Error("AI providers unavailable. AgnesAI failed after 3 attempts; Workers AI fallback failed: "+(fallbackError instanceof Error?fallbackError.message:String(fallbackError)));
     }
   }
 }
