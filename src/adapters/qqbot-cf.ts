@@ -8,7 +8,7 @@
 import { ExecutionContext } from '@cloudflare/workers-types';
 import { QQBotPayload } from '../types.js';
 import { Ed25519 } from '../utils/ed25519.js';
-import { OpenAICompatibleProvider, GeminiProvider } from '../providers/index.js';
+import { chatWithFallback, WorkersAI } from '../providers/index.js';
 import { MODEL_LIST } from '../models.js';
 import { QQBotAPIClient } from '../api/qqbot-api.js';
 import { QQBotDB, ChatMessage } from '../db/index.js';
@@ -20,9 +20,10 @@ export interface QQBotAdapterConfig {
   clientSecret: string;
   db: QQBotDB;
   maxInputTokens: number;
-  geminiApiKey: string;
-  openaiApiKey: string;
-  openaiBaseUrl: string;
+  agnesApiKey: string;
+  agnesBaseUrl: string;
+  agnesModel: string;
+  workersAI: WorkersAI;
   youtubeApiKey?: string;
   currentModelId?: string;
 }
@@ -32,9 +33,10 @@ export class QQBotAdapterCF {
   private apiClient: QQBotAPIClient | null = null;
   private db: QQBotDB;
   private maxInputTokens: number;
-  private geminiApiKey: string;
-  private openaiApiKey: string;
-  private openaiBaseUrl: string;
+  private agnesApiKey: string;
+  private agnesBaseUrl: string;
+  private agnesModel: string;
+  private workersAI: WorkersAI;
   private youtubeApiKey: string;
   private currentModelId: string;
 
@@ -46,9 +48,10 @@ export class QQBotAdapterCF {
     this.apiClient = new QQBotAPIClient(config.appId, config.clientSecret);
     this.db = config.db;
     this.maxInputTokens = config.maxInputTokens || 8192;
-    this.geminiApiKey = config.geminiApiKey;
-    this.openaiApiKey = config.openaiApiKey;
-    this.openaiBaseUrl = config.openaiBaseUrl;
+    this.agnesApiKey = config.agnesApiKey;
+    this.agnesBaseUrl = config.agnesBaseUrl;
+    this.agnesModel = config.agnesModel;
+    this.workersAI = config.workersAI;
     this.youtubeApiKey = config.youtubeApiKey || '';
     this.currentModelId = config.currentModelId || '1';
   }
@@ -201,7 +204,7 @@ export class QQBotAdapterCF {
 
       let aiResult: { content: string; totalTokens: number };
       try {
-        aiResult = await this.chatWithModel(modelInfo, aiMessages);
+        aiResult = await this.chatWithModel(aiMessages);
         console.log('[QQBot] AI raw:', JSON.stringify(aiResult.content).substring(0, 500));
         console.log('[QQBot] AI OK:', aiResult.content.length, 'chars,', aiResult.totalTokens, 'tokens');
       } catch (e) {
@@ -256,19 +259,22 @@ export class QQBotAdapterCF {
     }
   }
 
-  // ===== 按模型请求 AI =====
+  // ===== AgnesAI（三次尝试）→ Workers AI 兜底 =====
   private async chatWithModel(
-    modelInfo: (typeof MODEL_LIST)[number],
     messages: { role: string; content: string }[],
-    maxTokens = 1024
-  ): Promise<{ content: string; totalTokens: number }> {
-    if (modelInfo.provider === 'gemini') {
-      const provider = new GeminiProvider(this.geminiApiKey, modelInfo.model);
-      return provider.chat({ messages: messages.slice(1), systemPrompt: messages[0].content, maxTokens: 8192 });
-    } else {
-      const provider = new OpenAICompatibleProvider(this.openaiBaseUrl, this.openaiApiKey, modelInfo.model);
-      return provider.chat({ messages, maxTokens });
-    }
+  ): Promise<{ content: string; totalTokens: number; provider: string }> {
+    const result = await chatWithFallback(
+      { messages: messages.slice(1), systemPrompt: messages[0]?.content, maxTokens: 2048 },
+      {
+        agnesApiKey: this.agnesApiKey,
+        agnesBaseUrl: this.agnesBaseUrl,
+        agnesModel: this.agnesModel,
+        workersAI: this.workersAI,
+        workersModel: "@cf/openai/gpt-oss-120b",
+      },
+    );
+    console.log("[AI] Provider selected:", result.provider);
+    return result;
   }
 
   // ===== 固定指令 =====
