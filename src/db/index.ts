@@ -44,6 +44,13 @@ export class QQBotDB {
     }
     return [];
   }
+  async appendIncomingMessage(conversationId:string,userMsg:string,maxMessages=80):Promise<void>{
+    const messages=await this.getMessages(conversationId);
+    messages.push({role:"user",content:userMsg});
+    const now=Date.now();
+    await this.db.prepare("INSERT INTO conversations(conversation_id,messages,last_message_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET messages=excluded.messages,last_message_at=excluded.last_message_at,updated_at=excluded.updated_at")
+      .bind(conversationId,JSON.stringify(messages.slice(-maxMessages)),now,now).run();
+  }
   async appendMessages(conversationId: string,userMsg: string,assistantMsg: string,maxMessages=80): Promise<void> {
     const messages=await this.getMessages(conversationId);
     messages.push({role:"user",content:userMsg},{role:"assistant",content:assistantMsg});
