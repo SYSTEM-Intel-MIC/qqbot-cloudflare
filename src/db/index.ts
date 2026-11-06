@@ -71,14 +71,14 @@ export class QQBotDB {
     return Math.max(0,Math.min(100,Number(row?.affection??50)));
   }
   async changeAffection(userId:string,delta:number):Promise<number>{
-    const safe=Math.max(-3,Math.min(3,Math.trunc(delta)));
+    const safe=Number.isFinite(delta)?Math.max(-3,Math.min(3,Math.trunc(delta))):0;
     await this.db.prepare("INSERT INTO user_affection(user_id,affection,updated_at) VALUES(?,MAX(0,MIN(100,50+?)),?) ON CONFLICT(user_id) DO UPDATE SET affection=MAX(0,MIN(100,affection+?)),updated_at=excluded.updated_at")
       .bind(userId,safe,Date.now(),safe).run();
     return this.getAffection(userId);
   }
   async setAffection(userId:string,value:number):Promise<void>{
     await this.db.prepare("INSERT INTO user_affection(user_id,affection,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET affection=excluded.affection,updated_at=excluded.updated_at")
-      .bind(userId,Math.max(0,Math.min(100,Math.trunc(value))),Date.now()).run();
+      .bind(userId,Number.isFinite(value)?Math.max(0,Math.min(100,Math.trunc(value))):50,Date.now()).run();
   }
   async listUsers(limit=100):Promise<UserRecord[]>{
     const r=await this.db.prepare("SELECT user_id,affection,updated_at FROM user_affection ORDER BY updated_at DESC LIMIT ?").bind(Math.min(500,Math.max(1,limit))).all<UserRecord>();
@@ -90,7 +90,7 @@ export class QQBotDB {
   }
   async setReplyProbability(groupId:string,value:number):Promise<void>{
     await this.db.prepare("INSERT INTO group_settings(group_id,reply_probability,updated_at) VALUES(?,?,?) ON CONFLICT(group_id) DO UPDATE SET reply_probability=excluded.reply_probability,updated_at=excluded.updated_at")
-      .bind(groupId,Math.max(0,Math.min(100,Math.trunc(value))),Date.now()).run();
+      .bind(groupId,Number.isFinite(value)?Math.max(0,Math.min(100,Math.trunc(value))):30,Date.now()).run();
   }
   async listGroups():Promise<{group_id:string;reply_probability:number}[]>{
     const r=await this.db.prepare("SELECT group_id,reply_probability FROM group_settings ORDER BY group_id LIMIT 500").bind().all<any>();
