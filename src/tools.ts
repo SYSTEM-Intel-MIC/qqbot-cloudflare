@@ -8,9 +8,9 @@ export const AI_TOOLS = [
 function safeUrl(input:string):URL {
  const u=new URL(input);
  if(u.protocol!=="https:"||u.username||u.password)throw new Error("仅允许公开 HTTPS 网页");
- const h=u.hostname.toLowerCase().replace(/^\\[|\\]$/g,"");
+ const h=u.hostname.toLowerCase();
  if(h==="localhost"||h.endsWith(".localhost")||h.endsWith(".local")||h.endsWith(".internal")||h.endsWith(".intranet")||h==="metadata.google.internal")throw new Error("禁止访问本机或内部域名");
- if(/^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(h)||h.includes(":"))throw new Error("网页抓取只接受域名，不接受 IP 地址");
+ if(/^\d{1,3}(?:\.\d{1,3}){3}$/.test(h)||h.includes(":"))throw new Error("网页抓取只接受域名，不接受 IP 地址");
  return u;
 }
 async function webpage(url:string):Promise<string>{
