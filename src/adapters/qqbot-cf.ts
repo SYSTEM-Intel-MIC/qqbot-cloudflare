@@ -77,7 +77,6 @@ export class QQBotAdapterCF {
     console.log('[QQBot] ====== WEBHOOK ======');
     console.log('[QQBot] User-Agent:', userAgent);
     console.log('[QQBot] X-Bot-Appid:', botAppid);
-    console.log('[QQBot] Body:', body.substring(0, 200));
 
     let payload: QQBotPayload;
     try {
