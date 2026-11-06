@@ -24,6 +24,18 @@ export interface WorkersAI {
     tool_choice?:"auto"|"none";
   }):Promise<any>;
 }
+function normalizeToolCalls(raw:any[]):ToolCall[] {
+  return raw.map((call:any,index:number)=>{
+    const fn=call?.function||{};
+    const name=String(fn.name||call?.name||"");
+    const args=fn.arguments??call?.arguments??{};
+    return {
+      id:String(call?.id||"tool_call_"+index),
+      type:"function",
+      function:{name,arguments:typeof args==="string"?args:JSON.stringify(args)}
+    };
+  }).filter(call=>!!call.function.name);
+}
 function estimate(content:string,messages:any[]):number {
   return Math.ceil((content.length+messages.reduce((n,m)=>n+String(m.content||"").length,0))/3);
 }
@@ -43,7 +55,7 @@ export class AgnesAIProvider {
         if(!response.ok)throw new Error("AgnesAI HTTP "+response.status+": "+(await response.text()).slice(0,500));
         const data:any=await response.json(),message=data.choices?.[0]?.message||{};
         const content=typeof message.content==="string"?message.content:"";
-        const toolCalls=Array.isArray(message.tool_calls)?message.tool_calls:[];
+        const toolCalls=normalizeToolCalls(Array.isArray(message.tool_calls)?message.tool_calls:[]);
         if(!content.trim()&&!toolCalls.length)throw new Error("AgnesAI returned an empty response");
         return {content,totalTokens:Number(data.usage?.total_tokens)||estimate(content,messages),provider:"agnesai",toolCalls};
       }catch(e){lastError=e;console.warn("[AI] AgnesAI attempt "+attempt+"/3 failed:",e instanceof Error?e.message:String(e));if(attempt<3)await new Promise(resolve=>setTimeout(resolve,attempt*750));}
@@ -59,7 +71,7 @@ export class WorkersAIProvider {
       ...(req.tools?.length?{tools:req.tools,tool_choice:req.tool_choice||"auto"}:{})});
     const message=data?.choices?.[0]?.message||data;
     const content=typeof message?.content==="string"?message.content:(typeof data?.response==="string"?data.response:"");
-    const toolCalls=Array.isArray(message?.tool_calls)?message.tool_calls:[];
+    const toolCalls=normalizeToolCalls(Array.isArray(message?.tool_calls)?message.tool_calls:(Array.isArray(data?.tool_calls)?data.tool_calls:[]));
     if(!content.trim()&&!toolCalls.length)throw new Error("Workers AI returned an empty response");
     return {content,totalTokens:Number(data?.usage?.total_tokens)||estimate(content,messages),provider:"workers-ai",toolCalls};
   }
