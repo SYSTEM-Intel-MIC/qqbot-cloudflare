@@ -334,13 +334,14 @@ export class QQBotAdapterCF {
         ? this.parseAiResponse(result.content).reply
         : "（我来帮你" + names.map(n => labels[n] || "查询资料").join("、") + "，稍等我一下。）";
       if (notice) await this.sendReply(userId, groupId, msgId, notice.replaceAll('[[AT_USER]]', '<@!' + userId + '>'));
-      conversation.push({ role: "assistant", content: result.content || null, tool_calls: calls });
-      for (const [callIndex, call] of calls.slice(0, 3).entries()) {
+      conversation.push({ role: "assistant", content: result.content || "", tool_calls: calls });
+      for (const [callIndex, call] of calls.entries()) {
         const name = String(call.function?.name || "");
         const callId = String(call.id || "tool_" + round + "_" + callIndex);
         const args = (() => { try { return JSON.parse(call.function?.arguments || "{}"); } catch { return {}; } })();
         let output: string;
         try {
+          if (callIndex >= 3) throw new Error("本轮工具调用数量超出限制（最多 3 个），未执行");
           if (!allowed.some((tool: any) => tool.function.name === name)) throw new Error("此工具未在管理后台启用");
           output = await executeTool(name, args, { youtubeApiKey: this.youtubeApiKey, tavilyApiKey: this.tavilyApiKey });
         } catch (e) { output = "工具执行失败：" + (e instanceof Error ? e.message : String(e)); }
