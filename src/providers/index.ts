@@ -1,8 +1,7 @@
 /**
- * AI Provider 抽象层
- * 支持 OpenAI 兼容接口 / Gemini 官方接口
+ * AgnesAI primary provider with Cloudflare Workers AI free-tier fallback.
+ * AgnesAI is attempted exactly three times before Workers AI is used.
  */
-
 export interface ChatRequest {
   messages: { role: string; content: string }[];
   systemPrompt?: string;
@@ -14,120 +13,122 @@ export interface ChatRequest {
 export interface ChatResult {
   content: string;
   totalTokens: number;
+  provider: "agnesai" | "workers-ai";
 }
 
-export interface AIProvider {
-  chat(req: ChatRequest): Promise<ChatResult>;
+export interface WorkersAI {
+  run(
+    model: string,
+    input: {
+      messages: { role: string; content: string }[];
+      max_tokens?: number;
+      temperature?: number;
+    }
+  ): Promise<{ response?: string; usage?: { total_tokens?: number }; [key: string]: unknown }>;
 }
 
-// ===== OpenAI 兼容 Provider =====
-
-export class OpenAICompatibleProvider implements AIProvider {
+export class AgnesAIProvider {
   constructor(
-    private baseUrl: string,
     private apiKey: string,
-    private defaultModel: string,
+    private baseUrl = "https://apihub.agnes-ai.com/v1",
+    private model = "agnes-2.0-flash",
   ) {}
 
   async chat(req: ChatRequest): Promise<ChatResult> {
-    const messages = [];
-    if (req.systemPrompt) {
-      messages.push({ role: 'system', content: req.systemPrompt });
+    if (!this.apiKey) throw new Error("AGNESAI_API_KEY is not configured");
+    const messages = req.systemPrompt
+      ? [{ role: "system", content: req.systemPrompt }, ...req.messages]
+      : req.messages;
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await fetch(`${this.baseUrl.replace(/\\/$/, "")}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: req.model || this.model,
+            messages,
+            max_tokens: req.maxTokens ?? 2048,
+            temperature: req.temperature ?? 0.7,
+            stream: false,
+          }),
+        });
+        if (!response.ok) {
+          const detail = (await response.text()).slice(0, 500);
+          throw new Error(`AgnesAI HTTP ${response.status}: ${detail}`);
+        }
+        const data = await response.json() as any;
+        const content = data.choices?.[0]?.message?.content;
+        if (typeof content !== "string" || !content.trim()) {
+          throw new Error("AgnesAI returned an empty response");
+        }
+        const totalTokens = data.usage?.total_tokens
+          ?? Math.ceil((content.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3);
+        return { content, totalTokens, provider: "agnesai" };
+      } catch (error) {
+        lastError = error;
+        console.warn(`[AI] AgnesAI attempt ${attempt}/3 failed:`, error instanceof Error ? error.message : String(error));
+      }
     }
-    messages.push(...req.messages);
-
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: req.model || this.defaultModel,
-        messages,
-        max_tokens: req.maxTokens ?? 1024,
-        temperature: req.temperature ?? 0.7,
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`AI API error ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json() as any;
-    const content = data.choices?.[0]?.message?.content || '';
-    const usage = data.usage as any;
-    const totalTokens = usage?.total_tokens
-      ?? Math.round((content.length + messages.reduce((s: number, m: any) => s + m.content.length, 0)) * 1.3);
-
-    return { content, totalTokens };
+    throw new Error(`AgnesAI failed after 3 attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 }
 
-// ===== Gemini 官方 Provider =====
-
-export class GeminiProvider implements AIProvider {
-  constructor(
-    private apiKey: string,
-    private defaultModel: string,
-  ) {}
+export class WorkersAIProvider {
+  constructor(private binding: WorkersAI, private model = "@cf/openai/gpt-oss-120b") {}
 
   async chat(req: ChatRequest): Promise<ChatResult> {
-    // 构建 messages 部分
-    const contents: any[] = [];
-    for (const msg of req.messages) {
-      contents.push({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }],
-      });
-    }
-
-    const model = req.model || this.defaultModel;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
-
-    const body: any = {
-      contents,
-      generationConfig: {
-        maxOutputTokens: req.maxTokens ?? 8192,
-        temperature: req.temperature ?? 0.7,
-      },
-    };
-    if (req.systemPrompt) {
-      body.systemInstruction = { parts: [{ text: req.systemPrompt }] };
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    const messages = req.systemPrompt
+      ? [{ role: "system", content: req.systemPrompt }, ...req.messages]
+      : req.messages;
+    const data = await this.binding.run(this.model, {
+      messages,
+      max_tokens: req.maxTokens ?? 2048,
+      temperature: req.temperature ?? 0.7,
     });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Gemini API error ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json() as any;
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    // 取最后一个 parts 作为实际回复（think 在前，真正回复在最后）
-    const content = parts.length > 0 ? (parts[parts.length - 1]?.text || '') : '';
-    const usage = data.usageMetadata;
-    const totalTokens = usage?.totalTokenCount ?? Math.round(content.length * 1.3);
-
-    return { content, totalTokens };
+    const content = typeof data.response === "string" ? data.response : "";
+    if (!content.trim()) throw new Error("Workers AI returned an empty response");
+    const totalTokens = data.usage?.total_tokens
+      ?? Math.ceil((content.length + messages.reduce((n, m) => n + m.content.length, 0)) / 3);
+    return { content, totalTokens, provider: "workers-ai" };
   }
 }
 
-/** 从 Env 创建默认 OpenAI Provider */
-export function createProviderFromEnv(env: {
-  AI_BASE_URL?: string;
-  AI_API_KEY?: string;
-  AI_MODEL?: string;
-}): AIProvider {
-  const baseUrl = env.AI_BASE_URL || 'https://api.chatanywhere.org/v1';
-  const apiKey = env.AI_API_KEY || '';
-  const model = env.AI_MODEL || 'gpt-5.4-mini';
-  return new OpenAICompatibleProvider(baseUrl, apiKey, model);
+/**
+ * Retry AgnesAI three times, then use the native Workers AI binding.
+ * Workers AI remains subject to the account's included daily allocation;
+ * there is deliberately no paid-provider fallback.
+ */
+export async function chatWithFallback(
+  req: ChatRequest,
+  config: {
+    agnesApiKey: string;
+    agnesBaseUrl?: string;
+    agnesModel?: string;
+    workersAI: WorkersAI;
+    workersModel?: string;
+  },
+): Promise<ChatResult> {
+  try {
+    return await new AgnesAIProvider(
+      config.agnesApiKey,
+      config.agnesBaseUrl,
+      config.agnesModel,
+    ).chat(req);
+  } catch (agnesError) {
+    console.error("[AI] AgnesAI exhausted all 3 attempts; switching to Workers AI", agnesError);
+    try {
+      const result = await new WorkersAIProvider(config.workersAI, config.workersModel).chat(req);
+      console.info("[AI] Response generated by Workers AI fallback");
+      return result;
+    } catch (fallbackError) {
+      throw new Error(
+        `AI providers unavailable. AgnesAI failed after 3 attempts; Workers AI fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+      );
+    }
+  }
 }
