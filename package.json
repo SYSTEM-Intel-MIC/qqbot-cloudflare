@@ -5,8 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "build": "wrangler deploy --dry-run"
+    "deploy": "wrangler deploy --secrets-file .dev.vars",
+    "deploy:code": "wrangler deploy",
+    "sync:secrets": "node scripts/sync-secrets.mjs",
+    "sync:secrets:dry": "node scripts/sync-secrets.mjs --dry-run",
+    "build": "npm run typecheck && wrangler deploy --dry-run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@noble/curves": "^1.7.0"

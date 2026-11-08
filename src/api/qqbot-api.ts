@@ -21,6 +21,20 @@ export interface SendMessagePayload {
 export class QQBotAPIClient {
   private token: QQBotToken | null = null;
   private baseUrl = 'https://api.sgroup.qq.com';
+  // 同一个 msg_id 的多条被动回复必须让 msg_seq 递增；相同 msg_id + msg_seq
+  // 会被平台判为重复消息（40054005 / 消息被去重），表现为「第二条回复发不出去」。
+  private msgSeqByMsgId = new Map<string, number>();
+
+  private nextMsgSeq(msgId?: string): number {
+    if (!msgId) return 1;
+    const next = (this.msgSeqByMsgId.get(msgId) || 0) + 1;
+    this.msgSeqByMsgId.set(msgId, next);
+    if (this.msgSeqByMsgId.size > 500) {
+      const oldest = this.msgSeqByMsgId.keys().next().value;
+      if (oldest !== undefined) this.msgSeqByMsgId.delete(oldest);
+    }
+    return next;
+  }
 
   constructor(
     private appId: string,
@@ -107,18 +121,15 @@ export class QQBotAPIClient {
 
   private async sendMessage(path: string, content: string, msgId?: string): Promise<any> {
     const token = await this.getAccessToken();
-    const msgSeq = Math.floor(Math.random() * 9000) + 1000;
 
     const body: any = {
       content,
       msg_type: 0,
-      msg_seq: msgSeq,
+      msg_seq: this.nextMsgSeq(msgId),
     };
     if (msgId) body.msg_id = msgId;
 
     console.log(`[QQBot API] Sending to ${path}`);
-    console.log(`[QQBot API] Token: ${token?.substring(0, 10)}...`);
-    console.log(`[QQBot API] Body: ${JSON.stringify(body)}`);
 
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
@@ -129,10 +140,17 @@ export class QQBotAPIClient {
       body: JSON.stringify(body),
     });
 
-    const result = await res.json() as any;
+    // 2xx 但响应体为空/非 JSON 时，res.json() 会抛错。旧代码在这里抛出去会让
+    // deliverReply 误判「被动回复失败」并降级为主动消息再发一遍 —— 用户就会收到
+    // 两条一模一样的回复。发送是否成功只看 HTTP 状态，响应体解析失败不影响结论。
+    let result: any = {};
+    try { result = await res.json() as any; } catch { /* 空响应也算发送成功 */ }
     console.log(`[QQBot API] Response ${res.status}:`, JSON.stringify(result).substring(0, 200));
     if (!res.ok) {
-      console.error(`[QQBot API] Send error:`, result);
+      // 必须抛出：否则调用方会误以为消息已送达，日志里还会打印 "Reply sent OK"，
+      // 平台返回 40034105/40034005 之类的错误时表现为「机器人完全不回」。
+      const detail = result?.message || result?.msg || result?.code || JSON.stringify(result);
+      throw new Error(`QQ 消息发送失败 ${res.status}: ${detail}`);
     }
     return result;
   }
@@ -176,7 +194,7 @@ export class QQBotAPIClient {
     // 第二步：发送富媒体消息
     const body: any = {
       msg_type: 7,
-      msg_seq: Math.floor(Math.random() * 9000) + 1000,
+      msg_seq: this.nextMsgSeq(msgId),
       media: { file_info: upResult.file_info },
     };
     if (msgId) body.msg_id = msgId;

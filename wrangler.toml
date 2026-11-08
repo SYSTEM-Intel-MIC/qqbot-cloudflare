@@ -1,23 +1,37 @@
-account_id = "此处填写你的账户id"
 name = "qq-bot-cloudflare"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
-
-# 静态资源托管：public/ 目录下的文件会直接通过域名访问
-# 例如 public/pic.png → 你的域名/pic.png
-# 匹配到静态文件的请求直接返回文件，其余请求（如 /webhook/qqbot）走 Worker 代码
 assets = { directory = "./public" }
+
+# 声明了 [[routes]] 后 Wrangler 4.x 会把这两项默认为 false；线上原本是 true，
+# 显式写回来，避免部署后 workers.dev 地址与预览 URL 被顺手关掉。
+workers_dev = true
+preview_urls = true
 
 [observability]
 enabled = true
-head_sampling_rate = 0.1
+# 保留全量 console 日志，便于用 wrangler tail 排查线上问题。
+head_sampling_rate = 1
 
 [[d1_databases]]
 binding = "DB"
-database_id = "此处填写你d1 id"
+database_name = "qq-bot-db"
+# 换成你自己的 D1 数据库 ID（npx wrangler d1 create qq-bot-db 的输出）
+database_id = "CHANGE_ME_D1_DATABASE_ID"
 
+[ai]
+binding = "AI"
+
+# 自定义域名必须在本地声明。wrangler deploy 以本地配置为准，会把控制台里
+# 单独添加的 Custom Domain 从远程配置中移除；漏掉这段会导致部署后
+# https://bot.example.com/webhook/qqbot 失效、机器人收不到事件。
+[[routes]]
+pattern = "bot.example.com"
+custom_domain = true
+
+# 只放非敏感配置：随代码一起部署、明文保存。
 [vars]
 QQ_BOT_VERIFY_SIGNATURE = "true"
-AI_BASE_URL = "https://integrate.api.nvidia.com/v1"
-AI_MAX_TOKENS = "12800"
-AI_MAX_INPUT_TOKENS = "12800"
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+AI_MAX_INPUT_TOKENS = "8192"

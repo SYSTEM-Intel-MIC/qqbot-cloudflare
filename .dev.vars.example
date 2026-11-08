@@ -1,11 +1,15 @@
-QQ_BOT_APP_ID=你的APP_ID
-QQ_BOT_SECRET=你的Secret
-QQ_BOT_VERIFY_SIGNATURE=true
-AI_BASE_URL=https://api.chatanywhere.tech
-AI_API_KEY=你的AI_API_KEY
-AI_MODEL=gpt-5-mini
-AI_MAX_TOKENS=8192
-AI_MAX_INPUT_TOKENS=8192
-GEMINI_API_KEY=你的Gemini_API_KEY（可选，用于Gemini/Gemma模型）
-YOUTUBE_API_KEY=你的YouTube_Data_API_Key（可选，用于油管功能）
-CURRENT_MODEL_ID=1
+# 这个文件只放真正的密钥：npm run deploy 用 --secrets-file 把每一行都写成 Worker Secret。
+
+QQ_BOT_APP_ID=你的QQ开放平台AppID
+QQ_BOT_SECRET=你的QQ开放平台AppSecret
+
+# NVIDIA NIM 主模型（免费层）；失败两次后自动切换 Workers AI
+# 到 https://build.nvidia.com 生成 nvapi- 开头的 Key；模型迭代快，不可用时查 /v1/models
+NVIDIA_API_KEY=你的NVIDIA_NIM_API_Key
+
+#联网搜索工具 Tavily（可选）
+TAVILY_API_KEY=你的Tavily_API_Key
+
+# 管理员密码（明文，直接写你要用来登录 /admin 的密码）
+# 首次使用请务必把下面的占位值改成自己的密码，否则后台会拒绝登录并提示未设置。
+ADMIN_PASSWORD=CHANGE_ME_SET_YOUR_PASSWORD
